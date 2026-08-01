@@ -1,0 +1,27 @@
+PROJECT_NAME           = "terminalTool"
+PROJECT_NUMBER         = "@PROJECT_VERSION@"
+PROJECT_BRIEF          = "A small C++17 terminal game rendering and input library"
+OUTPUT_DIRECTORY       = "@CMAKE_CURRENT_BINARY_DIR@/documentation"
+INPUT                  = "@CMAKE_CURRENT_SOURCE_DIR@/include" \
+                         "@CMAKE_CURRENT_SOURCE_DIR@/README.md"
+EXAMPLE_PATH           = "@CMAKE_CURRENT_SOURCE_DIR@/examples"
+RECURSIVE              = YES
+FILE_PATTERNS           = *.h *.md
+USE_MDFILE_AS_MAINPAGE = "@CMAKE_CURRENT_SOURCE_DIR@/README.md"
+EXTRACT_ALL            = NO
+EXTRACT_PRIVATE        = NO
+EXTRACT_STATIC         = YES
+JAVADOC_AUTOBRIEF      = YES
+QT_AUTOBRIEF           = YES
+MARKDOWN_SUPPORT       = YES
+GENERATE_HTML          = YES
+GENERATE_LATEX         = NO
+HTML_OUTPUT            = html
+WARNINGS               = YES
+WARN_IF_UNDOCUMENTED   = YES
+WARN_IF_DOC_ERROR      = YES
+QUIET                  = NO
+HAVE_DOT               = NO
+SOURCE_BROWSER         = YES
+INLINE_SOURCES         = NO
+STRIP_FROM_PATH        = "@CMAKE_CURRENT_SOURCE_DIR@"
