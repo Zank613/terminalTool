@@ -9,7 +9,9 @@
 
 #include <algorithm>
 #include <chrono>
+#include <iomanip>
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <thread>
 
@@ -57,14 +59,17 @@ int main() {
 
         constexpr auto frameDuration = std::chrono::milliseconds(16);
 
-        int playerX = 8;
-        int playerY = 6;
+        double playerX = 8.0;
+        double playerY = 6.0;
+        constexpr double movementSpeed = 16.0;
         bool running = true;
         bool showHelp = true;
         std::string typedText;
+        tt::DeltaTime deltaTime;
 
         while (running) {
             const auto frameStart = std::chrono::steady_clock::now();
+            const double frameDeltaSeconds = deltaTime.update();
 
             (void) terminal.update();
             tt::Input::update();
@@ -149,10 +154,20 @@ int main() {
             const tt::Console::Rect worldPanel { 1, 2, width - sidebarWidth - 3, height - 4 };
             const tt::Console::Rect helpPanel { width - sidebarWidth - 1, 2, sidebarWidth, height - 4 };
 
-            playerX += horizontalMovement;
-            playerY += verticalMovement;
-            playerX = std::clamp(playerX, worldPanel.x + 1, worldPanel.x + worldPanel.width - 2);
-            playerY = std::clamp(playerY, worldPanel.y + 1, worldPanel.y + worldPanel.height - 2);
+            // The application chooses whether to clamp unusually large frame deltas.
+            const double movementDeltaSeconds = std::min(frameDeltaSeconds, 0.1);
+            playerX += static_cast<double>(horizontalMovement) * movementSpeed * movementDeltaSeconds;
+            playerY += static_cast<double>(verticalMovement) * movementSpeed * movementDeltaSeconds;
+            playerX = std::clamp(
+                playerX,
+                static_cast<double>(worldPanel.x + 1),
+                static_cast<double>(worldPanel.x + worldPanel.width - 2)
+            );
+            playerY = std::clamp(
+                playerY,
+                static_cast<double>(worldPanel.y + 1),
+                static_cast<double>(worldPanel.y + worldPanel.height - 2)
+            );
 
             tt::Console::drawTextAligned(
                 titleArea,
@@ -182,7 +197,9 @@ int main() {
                 );
             }
 
-            tt::Console::drawCell(playerX, playerY, U'@', playerColour, panelBackground);
+            const int playerCellX = static_cast<int>(playerX);
+            const int playerCellY = static_cast<int>(playerY);
+            tt::Console::drawCell(playerCellX, playerCellY, U'@', playerColour, panelBackground);
 
             const tt::Console::Rect worldContent {
                 worldPanel.x + 2,
@@ -192,7 +209,7 @@ int main() {
             };
 
             const std::string positionText =
-                "Position: " + std::to_string(playerX) + ", " + std::to_string(playerY);
+                "Position: " + std::to_string(playerCellX) + ", " + std::to_string(playerCellY);
 
             tt::Console::drawTextClipped(
                 worldContent.x,
@@ -241,10 +258,16 @@ int main() {
             }
 
             const std::string focusText = tt::Input::isFocused() ? "focused" : "not focused";
+            std::ostringstream statusText;
+            statusText
+                << "0.2.2 delta time • "
+                << std::fixed << std::setprecision(2)
+                << deltaTime.milliseconds() << " ms • "
+                << focusText;
 
             tt::Console::drawTextAligned(
                 tt::Console::Rect { 0, height - 1, width, 1 },
-                "0.2.1 hardening • F5 invalidation • Ctrl+C restoration • " + focusText,
+                statusText.str(),
                 tt::Console::TextAlignment::Centre,
                 muted,
                 screenBackground

@@ -9,13 +9,16 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <chrono>
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "terminalTool/Colour.h"
 #include "terminalTool/Console.h"
+#include "terminalTool/DeltaTime.h"
 #include "terminalTool/Input.h"
 #include "terminalTool/TerminalError.h"
 #include "terminalTool/Version.h"
@@ -109,8 +112,8 @@ void check(const bool condition, const char* expression, const int line) {
 void testVersion() {
     TT_CHECK(tt::Version::Major == 0);
     TT_CHECK(tt::Version::Minor == 2);
-    TT_CHECK(tt::Version::Patch == 1);
-    TT_CHECK(std::string(tt::Version::String) == "0.2.1");
+    TT_CHECK(tt::Version::Patch == 2);
+    TT_CHECK(std::string(tt::Version::String) == "0.2.2");
 }
 
 void testColourCacheAndPalette() {
@@ -192,6 +195,24 @@ void testInputStateAndText() {
     TT_CHECK(tt::Input::textInput() == "😀");
 }
 
+void testDeltaTime() {
+    tt::DeltaTime deltaTime;
+
+    TT_CHECK(deltaTime.seconds() == 0.0);
+    TT_CHECK(deltaTime.milliseconds() == 0.0);
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    const double measuredSeconds = deltaTime.update();
+
+    TT_CHECK(measuredSeconds > 0.0);
+    TT_CHECK(deltaTime.seconds() == measuredSeconds);
+    TT_CHECK(deltaTime.milliseconds() > 0.0);
+
+    deltaTime.reset();
+    TT_CHECK(deltaTime.seconds() == 0.0);
+    TT_CHECK(deltaTime.milliseconds() == 0.0);
+}
+
 void testTerminalError() {
     const tt::TerminalError error(
         tt::TerminalErrorCode::ReadInputFailed,
@@ -213,6 +234,7 @@ int main() {
     testFramebufferLifecycleAndInvalidation();
     testUtf8Helpers();
     testInputStateAndText();
+    testDeltaTime();
     testTerminalError();
 
     if (failures != 0) {

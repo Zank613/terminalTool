@@ -21,6 +21,7 @@ int main() {
     const tt::TerminalOptions options { "terminalTool", false };
     const tt::Colour colour = tt::Colours::BrightCyan;
     const tt::Console::Rect rectangle { 0, 0, 10, 5 };
+    const tt::DeltaTime deltaTime;
 
-    return options.title.empty() || colour.getBlue() == 0 || !rectangle.contains(0, 0);
+    return options.title.empty() || colour.getBlue() == 0 || !rectangle.contains(0, 0) || deltaTime.seconds() != 0.0;
 }

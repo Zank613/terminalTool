@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Ataerk YILDIRIM
 
 cmake_minimum_required(VERSION 3.20)
-project(terminalTool VERSION 0.2.1 LANGUAGES CXX)
+project(terminalTool VERSION 0.2.2 LANGUAGES CXX)
 
 message(STATUS "Configuring terminalTool ${PROJECT_VERSION}")
 
@@ -27,6 +27,7 @@ configure_file(
 add_library(terminalTool STATIC
     src/Colour.cpp
     src/Console.cpp
+    src/DeltaTime.cpp
     src/Input.cpp
     src/TerminalError.cpp
     src/TerminalSession.cpp

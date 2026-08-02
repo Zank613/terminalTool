@@ -15,8 +15,8 @@ jobs:
         shell: pwsh
         run: |
           $header = Get-Content build/generated/terminalTool/Version.h -Raw
-          if ($header -notmatch 'Patch = 1' -or $header -notmatch 'String = "0.2.1"') {
-            throw "Generated Version.h does not contain terminalTool 0.2.1"
+          if ($header -notmatch 'Patch = 2' -or $header -notmatch 'String = "0.2.2"') {
+            throw "Generated Version.h does not contain terminalTool 0.2.2"
           }
       - name: Build
         run: cmake --build build --config Release --parallel
@@ -44,8 +44,8 @@ jobs:
         run: cmake -S . -B build -G Ninja -DTERMINALTOOL_BUILD_EXAMPLE=ON -DTERMINALTOOL_BUILD_TESTS=ON -DTERMINALTOOL_BUILD_DOCS=OFF
       - name: Verify generated version
         run: |
-          grep -q 'Patch = 1' build/generated/terminalTool/Version.h
-          grep -q 'String = "0.2.1"' build/generated/terminalTool/Version.h
+          grep -q 'Patch = 2' build/generated/terminalTool/Version.h
+          grep -q 'String = "0.2.2"' build/generated/terminalTool/Version.h
       - name: Build
         run: cmake --build build --parallel
       - name: Test

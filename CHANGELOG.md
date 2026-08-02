@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.2.2 - 2026-08-02
+
+### Added
+
+- `tt::DeltaTime`, a small steady-clock utility for measuring elapsed time
+  between frame updates.
+- Delta-time access in seconds and milliseconds.
+- Reset support for restarting measurement with a stored delta of zero.
+- Unit tests, public-header coverage, Doxygen documentation, and an updated
+  demonstration for the timing API.
+
+### Changed
+
+- Project and generated package version updated to 0.2.2.
+- The demonstration now uses delta time for frame-rate-independent movement.
+
 ## 0.2.1 - 2026-08-02
 
 ### Fixed

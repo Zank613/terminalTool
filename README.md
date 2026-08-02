@@ -1,4 +1,4 @@
-# terminalTool 0.2.1
+# terminalTool 0.2.2
 
 `terminalTool` is a small C++17 terminal rendering and input library for
 terminal-based games and interactive tools. Its public API lives in the `tt`
@@ -8,21 +8,12 @@ namespace and the library is deliberately built as a static library.
 #include <terminalTool/terminalTool.h>
 ```
 
-## 0.2.1 highlights
+## 0.2.2 highlights
 
-- Strong exception safety when the terminal framebuffer is resized
-- Documented runtime errors for input reads and output writes
-- Original Windows console title restoration
-- Optional alternate-screen support
-- No Windows headers or macros exposed through public headers
-- Framebuffer and input lifetime controlled exclusively by `tt::TerminalSession`
-- `tt::Console::invalidate()` for forced full redraws
-- CMake-generated `tt::Version` constants
-- Self-contained unit tests and Windows CI for MSVC and MinGW
-
-The 0.2.0 features remain present: comprehensive Windows keyboard coverage,
-single-session ownership, framebuffer swapping, cached ANSI colour sequences,
-the built-in `tt::Colours` palette, and documented `tt::TerminalError` values.
+- `tt::DeltaTime` measures elapsed steady-clock time between frames
+- Delta time is available in seconds and milliseconds
+- The timer can be reset without reconstructing it
+- No frame limiter or game-loop ownership is imposed on applications
 
 ## Minimal use
 
@@ -71,6 +62,36 @@ int main() {
     }
 }
 ```
+
+## Delta time
+
+Create one `tt::DeltaTime` object immediately before the main loop and call
+`update()` once near the beginning of every frame:
+
+```cpp
+tt::DeltaTime deltaTime;
+
+while (running) {
+    const double frameSeconds = deltaTime.update();
+
+    playerX += movementSpeed * frameSeconds;
+
+    // Input, game update, drawing, and optional frame limiting remain yours.
+}
+```
+
+The measured value is also retained for later access:
+
+```cpp
+const double seconds = deltaTime.seconds();
+const double milliseconds = deltaTime.milliseconds();
+
+deltaTime.reset(); // Restarts measurement and stores a zero delta.
+```
+
+`tt::DeltaTime` uses `std::chrono::steady_clock`. It does not sleep, cap the
+frame rate, clamp long frames, or own the game loop. A game may clamp unusually
+large values itself when that behaviour is appropriate.
 
 ## Terminal options
 
@@ -236,7 +257,7 @@ cmake --install build --prefix install
 A consuming project can then use:
 
 ```cmake
-find_package(terminalTool 0.2.1 CONFIG REQUIRED)
+find_package(terminalTool 0.2.2 CONFIG REQUIRED)
 target_link_libraries(MyGame PRIVATE terminalTool::terminalTool)
 ```
 
@@ -273,7 +294,7 @@ The generated entry page is `build/documentation/html/index.html`.
 ```cpp
 static_assert(tt::Version::Major == 0);
 static_assert(tt::Version::Minor == 2);
-static_assert(tt::Version::Patch == 1);
+static_assert(tt::Version::Patch == 2);
 ```
 
 ## Platform status

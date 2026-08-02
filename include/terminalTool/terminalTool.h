@@ -10,6 +10,7 @@
 
 #include "terminalTool/Colour.h"
 #include "terminalTool/Console.h"
+#include "terminalTool/DeltaTime.h"
 #include "terminalTool/Input.h"
 #include "terminalTool/TerminalError.h"
 #include "terminalTool/TerminalSession.h"
