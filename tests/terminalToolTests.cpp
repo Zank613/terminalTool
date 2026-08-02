@@ -14,21 +14,84 @@
 #include <string>
 #include <vector>
 
-#ifdef __clang__
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wkeyword-macro"
-#endif
-#define private public
+#include "terminalTool/Colour.h"
 #include "terminalTool/Console.h"
 #include "terminalTool/Input.h"
-#undef private
-#ifdef __clang__
-#pragma clang diagnostic pop
-#endif
-
-#include "terminalTool/Colour.h"
 #include "terminalTool/TerminalError.h"
 #include "terminalTool/Version.h"
+
+namespace tt::detail {
+
+/**
+ * @brief Internal test-only access to private implementation state.
+ *
+ * Keeping the original access specifiers intact is important on MSVC because
+ * access level is encoded into decorated symbol names.
+ */
+class TestAccess {
+public:
+    static void initializeFrameBuffer(const int width, const int height) {
+        Console::initializeFrameBuffer(width, height);
+    }
+
+    static void resizeFrameBuffer(const int width, const int height) {
+        Console::resizeFrameBuffer(width, height);
+    }
+
+    static void shutdownFrameBuffer() noexcept {
+        Console::shutdownFrameBuffer();
+    }
+
+    [[nodiscard]] static std::size_t frameBufferSize() noexcept {
+        return Console::frameBuffer.size();
+    }
+
+    [[nodiscard]] static std::size_t previousBufferSize() noexcept {
+        return Console::previousBuffer.size();
+    }
+
+    [[nodiscard]] static char32_t frameCharacter(const std::size_t index) {
+        return Console::frameBuffer.at(index).character;
+    }
+
+    [[nodiscard]] static Colour frameForeground(const std::size_t index) {
+        return Console::frameBuffer.at(index).foreground;
+    }
+
+    static void setFirstFrame(const bool value) noexcept {
+        Console::firstFrame = value;
+    }
+
+    [[nodiscard]] static bool isFirstFrame() noexcept {
+        return Console::firstFrame;
+    }
+
+    [[nodiscard]] static std::string encodeUtf8(const char32_t character) {
+        return Console::encodeUtf8(character);
+    }
+
+    [[nodiscard]] static std::vector<char32_t> decodeUtf8(const std::string& text) {
+        return Console::decodeUtf8(text);
+    }
+
+    static void resetInput() noexcept {
+        Input::reset();
+    }
+
+    static void setKeyState(const Key key, const bool isDown) {
+        Input::setKeyState(key, isDown);
+    }
+
+    static void clearPressedKeys() noexcept {
+        Input::pressed.fill(false);
+    }
+
+    static void appendTextCodeUnit(const char16_t codeUnit, const std::uint16_t repeatCount) {
+        Input::appendTextCodeUnit(codeUnit, repeatCount);
+    }
+};
+
+} // namespace tt::detail
 
 namespace {
 
@@ -71,61 +134,61 @@ void testRectangles() {
 }
 
 void testFramebufferLifecycleAndInvalidation() {
-    tt::Console::shutdownFrameBuffer();
-    tt::Console::initializeFrameBuffer(4, 3);
+    tt::detail::TestAccess::shutdownFrameBuffer();
+    tt::detail::TestAccess::initializeFrameBuffer(4, 3);
 
     TT_CHECK(tt::Console::isActive());
     TT_CHECK(tt::Console::getFrameWidth() == 4);
     TT_CHECK(tt::Console::getFrameHeight() == 3);
-    TT_CHECK(tt::Console::frameBuffer.size() == 12);
-    TT_CHECK(tt::Console::previousBuffer.size() == 12);
+    TT_CHECK(tt::detail::TestAccess::frameBufferSize() == 12);
+    TT_CHECK(tt::detail::TestAccess::previousBufferSize() == 12);
 
     tt::Console::beginFrame(tt::Colours::BrightWhite, tt::Colours::Black);
     tt::Console::drawCell(2, 1, U'@', tt::Colours::BrightCyan, tt::Colours::Black);
 
     const std::size_t index = 1U * 4U + 2U;
-    TT_CHECK(tt::Console::frameBuffer[index].character == U'@');
-    TT_CHECK(tt::Console::frameBuffer[index].foreground == tt::Colours::BrightCyan);
+    TT_CHECK(tt::detail::TestAccess::frameCharacter(index) == U'@');
+    TT_CHECK(tt::detail::TestAccess::frameForeground(index) == tt::Colours::BrightCyan);
 
-    tt::Console::firstFrame = false;
+    tt::detail::TestAccess::setFirstFrame(false);
     tt::Console::invalidate();
-    TT_CHECK(tt::Console::firstFrame);
+    TT_CHECK(tt::detail::TestAccess::isFirstFrame());
 
-    tt::Console::resizeFrameBuffer(7, 2);
+    tt::detail::TestAccess::resizeFrameBuffer(7, 2);
     TT_CHECK(tt::Console::getFrameWidth() == 7);
     TT_CHECK(tt::Console::getFrameHeight() == 2);
-    TT_CHECK(tt::Console::frameBuffer.size() == 14);
-    TT_CHECK(tt::Console::previousBuffer.size() == 14);
-    TT_CHECK(tt::Console::firstFrame);
+    TT_CHECK(tt::detail::TestAccess::frameBufferSize() == 14);
+    TT_CHECK(tt::detail::TestAccess::previousBufferSize() == 14);
+    TT_CHECK(tt::detail::TestAccess::isFirstFrame());
 
-    tt::Console::shutdownFrameBuffer();
+    tt::detail::TestAccess::shutdownFrameBuffer();
     TT_CHECK(!tt::Console::isActive());
 }
 
 void testUtf8Helpers() {
-    const std::vector<char32_t> decoded = tt::Console::decodeUtf8("Aç€😀");
+    const std::vector<char32_t> decoded = tt::detail::TestAccess::decodeUtf8("Aç€😀");
     TT_CHECK(decoded.size() == 4);
     TT_CHECK(decoded[0] == U'A');
     TT_CHECK(decoded[1] == U'ç');
     TT_CHECK(decoded[2] == U'€');
     TT_CHECK(decoded[3] == U'😀');
-    TT_CHECK(tt::Console::encodeUtf8(U'😀') == "😀");
+    TT_CHECK(tt::detail::TestAccess::encodeUtf8(U'😀') == "😀");
 }
 
 void testInputStateAndText() {
-    tt::Input::reset();
-    tt::Input::setKeyState(tt::Key::A, true);
+    tt::detail::TestAccess::resetInput();
+    tt::detail::TestAccess::setKeyState(tt::Key::A, true);
     TT_CHECK(tt::Input::isHeld(tt::Key::A));
     TT_CHECK(tt::Input::isPressed(tt::Key::A));
 
-    tt::Input::pressed.fill(false);
-    tt::Input::setKeyState(tt::Key::A, false);
+    tt::detail::TestAccess::clearPressedKeys();
+    tt::detail::TestAccess::setKeyState(tt::Key::A, false);
     TT_CHECK(!tt::Input::isHeld(tt::Key::A));
     TT_CHECK(tt::Input::isReleased(tt::Key::A));
 
-    tt::Input::reset();
-    tt::Input::appendTextCodeUnit(0xD83D, 1);
-    tt::Input::appendTextCodeUnit(0xDE00, 1);
+    tt::detail::TestAccess::resetInput();
+    tt::detail::TestAccess::appendTextCodeUnit(0xD83D, 1);
+    tt::detail::TestAccess::appendTextCodeUnit(0xDE00, 1);
     TT_CHECK(tt::Input::textInput() == "😀");
 }
 

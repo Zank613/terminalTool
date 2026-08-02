@@ -16,6 +16,7 @@
 namespace tt {
 
 class TerminalSession;
+namespace detail { class TestAccess; }
 
 /**
  * @brief Keyboard keys recognised by terminalTool's Windows console backend.
@@ -217,6 +218,7 @@ enum class Key : std::size_t {
 class Input {
 private:
     friend class TerminalSession;
+    friend class detail::TestAccess;
     static constexpr std::size_t KEY_COUNT = static_cast<std::size_t>(Key::Count);
 
     static std::array<bool, KEY_COUNT> current;

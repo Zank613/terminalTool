@@ -2,6 +2,14 @@
 
 ## 0.2.1 - 2026-08-02
 
+### Fixed
+
+- Generated `Version.h` now has include priority over obsolete source-tree
+  copies left behind by in-place upgrades from 0.2.0.
+- Installation explicitly excludes stale source-tree `Version.h` files.
+- Unit tests no longer use `#define private public`, which changed MSVC
+  decorated symbol names and caused unresolved external linker errors.
+
 ### Added
 
 - `tt::TerminalOptions` with optional alternate-screen behavior.

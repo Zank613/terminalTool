@@ -17,6 +17,7 @@
 namespace tt {
 
 class TerminalSession;
+namespace detail { class TestAccess; }
 
 /**
  * @brief Static cell-based terminal framebuffer and drawing API.
@@ -68,6 +69,7 @@ public:
 
 private:
     friend class TerminalSession;
+    friend class detail::TestAccess;
 
     struct Cell {
         char32_t character = U' ';

@@ -4,6 +4,8 @@
 cmake_minimum_required(VERSION 3.20)
 project(terminalTool VERSION 0.2.1 LANGUAGES CXX)
 
+message(STATUS "Configuring terminalTool ${PROJECT_VERSION}")
+
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 include(CTest)
@@ -40,8 +42,8 @@ set_target_properties(terminalTool PROPERTIES
 
 target_include_directories(terminalTool
     PUBLIC
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<BUILD_INTERFACE:${TERMINALTOOL_GENERATED_INCLUDE_DIR}>
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 
@@ -113,7 +115,9 @@ install(TARGETS terminalTool
 install(
     DIRECTORY include/terminalTool/
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/terminalTool
-    FILES_MATCHING PATTERN "*.h"
+    FILES_MATCHING
+        PATTERN "*.h"
+        PATTERN "Version.h" EXCLUDE
 )
 
 install(
