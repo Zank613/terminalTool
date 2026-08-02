@@ -1,4 +1,4 @@
-# terminalTool 0.2.0
+# terminalTool 0.2.1
 
 `terminalTool` is a small C++17 terminal rendering and input library for
 terminal-based games and interactive tools. Its public API lives in the `tt`
@@ -8,17 +8,21 @@ namespace and the library is deliberately built as a static library.
 #include <terminalTool/terminalTool.h>
 ```
 
-## 0.2.0 highlights
+## 0.2.1 highlights
 
-- Comprehensive Windows console keyboard coverage
-- Documented `tt::TerminalError` exceptions with portable and native error codes
-- Exactly one `tt::TerminalSession` per process
-- Static-library-only CMake target
-- Framebuffer swapping instead of whole-frame copying
-- Globally cached ANSI true-colour sequences
-- Ready-to-use conventional ANSI/VGA-style colours under `tt::Colours`
-- MPL 2.0 licensing, copyright notice, and source-file SPDX headers
-- Public semantic version constants under `tt::Version`
+- Strong exception safety when the terminal framebuffer is resized
+- Documented runtime errors for input reads and output writes
+- Original Windows console title restoration
+- Optional alternate-screen support
+- No Windows headers or macros exposed through public headers
+- Framebuffer and input lifetime controlled exclusively by `tt::TerminalSession`
+- `tt::Console::invalidate()` for forced full redraws
+- CMake-generated `tt::Version` constants
+- Self-contained unit tests and Windows CI for MSVC and MinGW
+
+The 0.2.0 features remain present: comprehensive Windows keyboard coverage,
+single-session ownership, framebuffer swapping, cached ANSI colour sequences,
+the built-in `tt::Colours` palette, and documented `tt::TerminalError` values.
 
 ## Minimal use
 
@@ -29,11 +33,16 @@ namespace and the library is deliberately built as a static library.
 
 int main() {
     try {
-        tt::TerminalSession terminal("My Game");
+        const tt::TerminalOptions options {
+            "My Game",
+            true // Use the alternate screen buffer.
+        };
+
+        tt::TerminalSession terminal(options);
         bool running = true;
 
         while (running) {
-            terminal.update();
+            (void) terminal.update();
             tt::Input::update();
 
             if (tt::Input::isPressed(tt::Key::Escape)) {
@@ -63,57 +72,87 @@ int main() {
 }
 ```
 
-## Library target
+## Terminal options
 
-The exported and in-tree CMake target is:
+```cpp
+const tt::TerminalOptions options {
+    "My Game",
+    true
+};
 
-```cmake
-target_link_libraries(MyGame PRIVATE terminalTool::terminalTool)
+tt::TerminalSession terminal(options);
 ```
 
-The target remains a static library even when a parent project sets
-`BUILD_SHARED_LIBS` to `ON`.
+`alternateScreen = true` enters the terminal's alternate screen buffer. The
+normal terminal contents return when the session ends. Set it to `false` when
+the rendered output should remain in the normal terminal history.
 
-## Use with `add_subdirectory`
+The original constructor remains available and enables the alternate screen:
 
-Place the project under your own repository, for example:
-
-```text
-MyGame/
-├── CMakeLists.txt
-├── src/
-└── external/
-    └── terminalTool/
+```cpp
+tt::TerminalSession terminal("My Game");
 ```
 
-Then link it:
+## Lifetime ownership
 
-```cmake
-set(TERMINALTOOL_BUILD_EXAMPLE OFF CACHE BOOL "" FORCE)
-set(TERMINALTOOL_BUILD_DOCS OFF CACHE BOOL "" FORCE)
+Exactly one `tt::TerminalSession` may exist in a process. A second construction
+throws `tt::TerminalErrorCode::SessionAlreadyActive`.
 
-add_subdirectory(external/terminalTool)
+Framebuffer initialization, framebuffer resizing, framebuffer shutdown, input
+initialization, and input reset are internal operations owned by
+`TerminalSession`. Applications use only the public drawing, presentation, and
+input-query API.
 
-target_link_libraries(MyGame PRIVATE terminalTool::terminalTool)
+All `TerminalSession`, `Console`, and `Input` calls should be made from the
+thread that owns the terminal.
+
+## Runtime errors
+
+Initialization and runtime terminal operations throw `tt::TerminalError`.
+Important runtime categories include:
+
+```cpp
+tt::TerminalErrorCode::FrameBufferResizeFailed
+tt::TerminalErrorCode::FlushInputFailed
+tt::TerminalErrorCode::QueryInputEventCountFailed
+tt::TerminalErrorCode::ReadInputFailed
+tt::TerminalErrorCode::WriteOutputFailed
 ```
 
-## Install and use with `find_package`
+The exception provides:
 
-```sh
-cmake -S . -B build -DTERMINALTOOL_BUILD_EXAMPLE=OFF
-cmake --build build
-cmake --install build --prefix install
+- `error.code()` — portable terminalTool error category
+- `error.nativeErrorCode()` — Windows `GetLastError()` or POSIX `errno` when available
+- `error.what()` — human-readable description
+
+## Forced redraws
+
+Call `tt::Console::invalidate()` when external code has written directly to the
+terminal or when the physical terminal contents may no longer match the stored
+previous framebuffer:
+
+```cpp
+if (tt::Input::isPressed(tt::Key::F5)) {
+    tt::Console::invalidate();
+}
 ```
 
-A consuming project can then use:
+The next `tt::Console::endFrame()` performs a complete redraw.
 
-```cmake
-find_package(terminalTool 0.2.0 CONFIG REQUIRED)
-target_link_libraries(MyGame PRIVATE terminalTool::terminalTool)
+## Framebuffer resizing
+
+`tt::TerminalSession::update()` checks the visible terminal size and safely
+replaces both framebuffers when it changes:
+
+```cpp
+if (terminal.update()) {
+    // Recalculate cached game layouts here.
+}
 ```
 
-Pass the installation directory through `CMAKE_PREFIX_PATH` while configuring
-the consuming project.
+The new buffers are allocated before any live dimensions or storage are
+changed. If allocation fails, the old framebuffer remains valid and a
+`FrameBufferResizeFailed` exception is thrown.
 
 ## Keyboard input
 
@@ -134,18 +173,9 @@ if (tt::Input::isReleased(tt::Key::Space)) {
 }
 ```
 
-The Windows backend covers:
-
-- `A-Z` and number-row `0-9`
-- F1-F24
-- arrows, Home, End, Insert, Delete, Page Up, and Page Down
-- left/right Shift, Control, Alt, and Windows keys
-- punctuation and non-US backslash keys
-- the complete numpad, including distinct numpad Enter
-- Caps Lock, Num Lock, Scroll Lock, Print Screen, Pause, Menu, and Sleep
-- IME and international keyboard keys exposed by the Windows console
-- browser, volume, media, and application-launch keys
-- Windows legacy keyboard virtual keys
+The Windows backend covers letters, number-row keys, F1-F24, navigation,
+left/right modifiers, punctuation, the complete numpad, IME/international keys,
+browser/media controls, application launch keys, and Windows legacy keys.
 
 Printable text is exposed separately as UTF-8:
 
@@ -154,63 +184,15 @@ std::string command;
 command += tt::Input::textInput();
 ```
 
-## Initialization errors
-
-`tt::TerminalSession` throws `tt::TerminalError` when initialization cannot be
-completed. The exception contains:
-
-- `error.code()` — a portable `tt::TerminalErrorCode`
-- `error.nativeErrorCode()` — `GetLastError()` on Windows or `errno` on POSIX
-- `error.what()` — a human-readable explanation
-
-Examples include redirected standard streams, invalid console handles, ANSI
-mode failure, UTF-8 code-page failure, control-handler failure, terminal-size
-query failure, and trying to create a second session.
-
-```cpp
-try {
-    tt::TerminalSession first;
-    tt::TerminalSession second; // Throws SessionAlreadyActive.
-} catch (const tt::TerminalError& error) {
-    if (error.code() == tt::TerminalErrorCode::SessionAlreadyActive) {
-        // Handle the programming error.
-    }
-}
-```
-
 ## Built-in colours
 
 Every unique RGB value shares cached foreground and background ANSI strings.
-`Colour::foreground()` and `Colour::background()` return references to these
-cached strings.
-
-A conventional 16-colour RGB palette is available instantly:
+A conventional 16-colour RGB palette is available under `tt::Colours`:
 
 ```cpp
-tt::Colours::Black
 tt::Colours::Red
-tt::Colours::Green
-tt::Colours::Yellow
-tt::Colours::Blue
-tt::Colours::Magenta
-tt::Colours::Cyan
-tt::Colours::White
-
-tt::Colours::BrightBlack
-tt::Colours::BrightRed
-tt::Colours::BrightGreen
 tt::Colours::BrightYellow
-tt::Colours::BrightBlue
-tt::Colours::BrightMagenta
 tt::Colours::BrightCyan
-tt::Colours::BrightWhite
-```
-
-Also provided:
-
-```cpp
-tt::Colours::Grey
-tt::Colours::LightGrey
 tt::Colours::DefaultForeground
 tt::Colours::DefaultBackground
 ```
@@ -221,77 +203,91 @@ Custom true colours remain available:
 const tt::Colour sugarGold(235, 190, 90);
 ```
 
-## Framebuffer behavior
+## CMake target
 
-The frame loop remains:
+The exported and in-tree target is:
 
-```cpp
-tt::Console::beginFrame();
-// Draw the complete desired frame.
-tt::Console::endFrame();
+```cmake
+target_link_libraries(MyGame PRIVATE terminalTool::terminalTool)
 ```
 
-`endFrame()` compares the new frame against the previously presented frame,
-selects a full or differential update, and swaps the two framebuffer vectors.
-It does not copy the complete framebuffer after each presented frame.
+It remains a static library even when a parent project sets
+`BUILD_SHARED_LIBS` to `ON`.
+
+### Use with `add_subdirectory`
+
+```cmake
+set(TERMINALTOOL_BUILD_EXAMPLE OFF CACHE BOOL "" FORCE)
+set(TERMINALTOOL_BUILD_DOCS OFF CACHE BOOL "" FORCE)
+set(TERMINALTOOL_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+
+add_subdirectory(external/terminalTool)
+target_link_libraries(MyGame PRIVATE terminalTool::terminalTool)
+```
+
+### Install and use with `find_package`
+
+```sh
+cmake -S . -B build -DTERMINALTOOL_BUILD_EXAMPLE=OFF
+cmake --build build
+cmake --install build --prefix install
+```
+
+A consuming project can then use:
+
+```cmake
+find_package(terminalTool 0.2.1 CONFIG REQUIRED)
+target_link_libraries(MyGame PRIVATE terminalTool::terminalTool)
+```
+
+## Tests
+
+The project includes self-contained tests that do not require an interactive
+terminal:
+
+```sh
+cmake -S . -B build -DTERMINALTOOL_BUILD_TESTS=ON
+cmake --build build
+ctest --test-dir build --output-on-failure
+```
+
+The Windows workflow builds, tests, and installs the project with both MSVC and
+MinGW UCRT64.
 
 ## Doxygen documentation
 
-Every public class, enum, function, and constant is documented. When Doxygen is
-installed, CMake creates a `docs` target:
+Every public class, structure, enum, function, and constant is documented. When
+Doxygen is installed, CMake creates a `docs` target:
 
 ```sh
 cmake -S . -B build
 cmake --build build --target docs
 ```
 
-The generated entry page is:
-
-```text
-build/documentation/html/index.html
-```
-
-## Demo
-
-Open the extracted project in CLion, select `terminalToolDemo`, and run the
-resulting executable in Windows Terminal or another real console.
-
-- `WASD` or arrow keys move the `@`
-- printable typing tests UTF-8 text events
-- Backspace edits the sample text
-- Tab toggles the help panel
-- Escape exits normally
-- Ctrl+C tests emergency terminal restoration
-
-CLion's normal output window may not provide real console events, resizing, or
-ANSI behavior.
+The generated entry page is `build/documentation/html/index.html`.
 
 ## Version
+
+`Version.h` is generated from the CMake project version:
 
 ```cpp
 static_assert(tt::Version::Major == 0);
 static_assert(tt::Version::Minor == 2);
-static_assert(tt::Version::Patch == 0);
+static_assert(tt::Version::Patch == 1);
 ```
 
 ## Platform status
 
-- Windows has the complete event-based keyboard implementation.
+- Windows has complete event-based keyboard input and emergency restoration.
 - Rendering and terminal-size queries build on POSIX systems.
 - Non-Windows keyboard input is still intentionally inactive.
 - Unicode code points are currently treated as one terminal cell each. Wide
-  glyphs and combining sequences need a future display-width implementation.
+  glyphs and combining sequences require a future display-width implementation.
 
 ## Licence and ownership
 
 terminalTool is distributed under the **Mozilla Public License 2.0**. See
 `LICENSE` for the complete terms and `NOTICE.md` for the project copyright
 notice.
-
-The MPL 2.0 is a file-level weak-copyleft licence. Covered source files and
-modifications to them must remain available under the MPL when distributed,
-while separate files in a larger application may use other terms. This allows
-terminalTool to be linked into open or proprietary games without relicensing
-the game's separate source files.
 
 Copyright (c) 2026 Ataerk YILDIRIM.

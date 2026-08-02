@@ -14,6 +14,10 @@
 #include <cerrno>
 #include <cstdint>
 #include <iostream>
+#include <limits>
+#include <new>
+#include <stdexcept>
+#include <utility>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -26,10 +30,8 @@ namespace tt {
 
 int Console::frameWidth = 0;
 int Console::frameHeight = 0;
-
 bool Console::frameBufferActive = false;
 bool Console::firstFrame = true;
-
 std::vector<Console::Cell> Console::frameBuffer;
 std::vector<Console::Cell> Console::previousBuffer;
 
@@ -52,30 +54,53 @@ bool Console::Cell::operator!=(const Cell& other) const {
     return !(*this == other);
 }
 
-void Console::initializeFrameBuffer(const int width, const int height) {
+std::size_t Console::checkedCellCount(const int width, const int height, const bool resizing) {
+    const TerminalErrorCode code = resizing
+        ? TerminalErrorCode::FrameBufferResizeFailed
+        : TerminalErrorCode::FrameBufferInitializationFailed;
+
     if (width <= 0 || height <= 0) {
-        return;
+        throw TerminalError(code, "terminalTool received invalid framebuffer dimensions.");
+    }
+
+    const std::size_t unsignedWidth = static_cast<std::size_t>(width);
+    const std::size_t unsignedHeight = static_cast<std::size_t>(height);
+
+    if (unsignedWidth > std::numeric_limits<std::size_t>::max() / unsignedHeight) {
+        throw TerminalError(code, "terminalTool framebuffer dimensions overflow the addressable cell count.");
+    }
+
+    return unsignedWidth * unsignedHeight;
+}
+
+void Console::initializeFrameBuffer(const int width, const int height) {
+    const std::size_t cellCount = checkedCellCount(width, height, false);
+
+    try {
+        std::vector<Cell> newFrameBuffer(cellCount);
+        std::vector<Cell> newPreviousBuffer(cellCount);
+
+        frameBuffer.swap(newFrameBuffer);
+        previousBuffer.swap(newPreviousBuffer);
+    } catch (const std::bad_alloc&) {
+        throw TerminalError(
+            TerminalErrorCode::FrameBufferInitializationFailed,
+            "terminalTool could not allocate its terminal framebuffer."
+        );
+    } catch (const std::length_error&) {
+        throw TerminalError(
+            TerminalErrorCode::FrameBufferInitializationFailed,
+            "terminalTool framebuffer dimensions exceed the vector size limit."
+        );
     }
 
     frameWidth = width;
     frameHeight = height;
-
-    const std::size_t cellCount =
-        static_cast<std::size_t>(frameWidth) *
-        static_cast<std::size_t>(frameHeight);
-
-    frameBuffer.assign(cellCount, Cell {});
-    previousBuffer.assign(cellCount, Cell {});
-
     frameBufferActive = true;
     firstFrame = true;
 }
 
 void Console::resizeFrameBuffer(const int width, const int height) {
-    if (width <= 0 || height <= 0) {
-        return;
-    }
-
     if (!frameBufferActive) {
         initializeFrameBuffer(width, height);
         return;
@@ -85,19 +110,29 @@ void Console::resizeFrameBuffer(const int width, const int height) {
         return;
     }
 
+    const std::size_t cellCount = checkedCellCount(width, height, true);
+
+    try {
+        std::vector<Cell> newFrameBuffer(cellCount);
+        std::vector<Cell> newPreviousBuffer(cellCount);
+
+        frameBuffer.swap(newFrameBuffer);
+        previousBuffer.swap(newPreviousBuffer);
+    } catch (const std::bad_alloc&) {
+        throw TerminalError(
+            TerminalErrorCode::FrameBufferResizeFailed,
+            "terminalTool could not allocate the resized terminal framebuffer."
+        );
+    } catch (const std::length_error&) {
+        throw TerminalError(
+            TerminalErrorCode::FrameBufferResizeFailed,
+            "terminalTool resized framebuffer dimensions exceed the vector size limit."
+        );
+    }
+
     frameWidth = width;
     frameHeight = height;
-
-    const std::size_t cellCount =
-        static_cast<std::size_t>(frameWidth) *
-        static_cast<std::size_t>(frameHeight);
-
-    frameBuffer.assign(cellCount, Cell {});
-    previousBuffer.assign(cellCount, Cell {});
-
     firstFrame = true;
-
-    std::cout << "\033[2J\033[H";
 }
 
 bool Console::resizeToTerminal() {
@@ -111,13 +146,11 @@ bool Console::resizeToTerminal() {
     return true;
 }
 
-void Console::shutdownFrameBuffer() {
+void Console::shutdownFrameBuffer() noexcept {
     frameBuffer.clear();
     previousBuffer.clear();
-
     frameWidth = 0;
     frameHeight = 0;
-
     firstFrame = true;
     frameBufferActive = false;
 }
@@ -165,16 +198,22 @@ Console::Size Console::terminalSize() {
 #endif
 }
 
-int Console::getFrameWidth() {
+int Console::getFrameWidth() noexcept {
     return frameWidth;
 }
 
-int Console::getFrameHeight() {
+int Console::getFrameHeight() noexcept {
     return frameHeight;
 }
 
-bool Console::isActive() {
+bool Console::isActive() noexcept {
     return frameBufferActive;
+}
+
+void Console::invalidate() noexcept {
+    if (frameBufferActive) {
+        firstFrame = true;
+    }
 }
 
 void Console::beginFrame(const Colour foreground, const Colour background) {
@@ -182,12 +221,7 @@ void Console::beginFrame(const Colour foreground, const Colour background) {
         return;
     }
 
-    const Cell emptyCell {
-        U' ',
-        foreground,
-        background
-    };
-
+    const Cell emptyCell { U' ', foreground, background };
     std::fill(frameBuffer.begin(), frameBuffer.end(), emptyCell);
 }
 
@@ -202,7 +236,11 @@ void Console::drawCell(
         return;
     }
 
-    Cell& cell = frameBuffer[static_cast<std::size_t>(y * frameWidth + x)];
+    const std::size_t index =
+        static_cast<std::size_t>(y) * static_cast<std::size_t>(frameWidth) +
+        static_cast<std::size_t>(x);
+
+    Cell& cell = frameBuffer[index];
     cell.character = character;
     cell.foreground = foreground;
     cell.background = background;
@@ -241,11 +279,9 @@ void Console::drawTextClipped(
     for (std::size_t i = 0; i < characters.size(); i++) {
         const int cellX = x + static_cast<int>(i);
 
-        if (!visibleClip.contains(cellX, y)) {
-            continue;
+        if (visibleClip.contains(cellX, y)) {
+            drawCell(cellX, y, characters[i], foreground, background);
         }
-
-        drawCell(cellX, y, characters[i], foreground, background);
     }
 }
 
@@ -265,7 +301,6 @@ void Console::drawTextAligned(
 
     switch (alignment) {
         case TextAlignment::Left:
-            x = area.x;
             break;
 
         case TextAlignment::Centre:
@@ -389,14 +424,7 @@ int Console::drawWrappedText(
                 break;
         }
 
-        drawTextClipped(
-            x,
-            area.y + lineIndex,
-            encodedLine,
-            area,
-            foreground,
-            background
-        );
+        drawTextClipped(x, area.y + lineIndex, encodedLine, area, foreground, background);
     }
 
     return visibleLines;
@@ -467,52 +495,15 @@ void Console::drawBox(
 
     const BoxCharacters characters = boxCharacters(style);
 
-    drawHorizontalLine(
-        area.x + 1,
-        area.y,
-        area.width - 2,
-        characters.horizontal,
-        foreground,
-        background
-    );
-
-    drawHorizontalLine(
-        area.x + 1,
-        area.y + area.height - 1,
-        area.width - 2,
-        characters.horizontal,
-        foreground,
-        background
-    );
-
-    drawVerticalLine(
-        area.x,
-        area.y + 1,
-        area.height - 2,
-        characters.vertical,
-        foreground,
-        background
-    );
-
-    drawVerticalLine(
-        area.x + area.width - 1,
-        area.y + 1,
-        area.height - 2,
-        characters.vertical,
-        foreground,
-        background
-    );
+    drawHorizontalLine(area.x + 1, area.y, area.width - 2, characters.horizontal, foreground, background);
+    drawHorizontalLine(area.x + 1, area.y + area.height - 1, area.width - 2, characters.horizontal, foreground, background);
+    drawVerticalLine(area.x, area.y + 1, area.height - 2, characters.vertical, foreground, background);
+    drawVerticalLine(area.x + area.width - 1, area.y + 1, area.height - 2, characters.vertical, foreground, background);
 
     drawCell(area.x, area.y, characters.topLeft, foreground, background);
     drawCell(area.x + area.width - 1, area.y, characters.topRight, foreground, background);
     drawCell(area.x, area.y + area.height - 1, characters.bottomLeft, foreground, background);
-    drawCell(
-        area.x + area.width - 1,
-        area.y + area.height - 1,
-        characters.bottomRight,
-        foreground,
-        background
-    );
+    drawCell(area.x + area.width - 1, area.y + area.height - 1, characters.bottomRight, foreground, background);
 }
 
 void Console::drawPanel(
@@ -531,21 +522,8 @@ void Console::drawPanel(
     drawBox(area, border, background, style);
 
     if (!title.empty() && area.width > 4) {
-        const Rect titleArea {
-            area.x + 2,
-            area.y,
-            area.width - 4,
-            1
-        };
-
-        drawTextClipped(
-            titleArea.x,
-            titleArea.y,
-            " " + title + " ",
-            titleArea,
-            border,
-            background
-        );
+        const Rect titleArea { area.x + 2, area.y, area.width - 4, 1 };
+        drawTextClipped(titleArea.x, titleArea.y, " " + title + " ", titleArea, border, background);
     }
 }
 
@@ -554,50 +532,56 @@ void Console::endFrame() {
         return;
     }
 
-    if (firstFrame) {
-        renderFullFrame();
-        previousBuffer.swap(frameBuffer);
-        firstFrame = false;
-        std::cout.flush();
-        return;
-    }
-
-    std::size_t changedCells = 0;
-
-    for (std::size_t i = 0; i < frameBuffer.size(); i++) {
-        if (frameBuffer[i] != previousBuffer[i]) {
-            changedCells++;
+    try {
+        if (firstFrame) {
+            renderFullFrame();
+            previousBuffer.swap(frameBuffer);
+            firstFrame = false;
+            return;
         }
-    }
 
-    if (changedCells == 0) {
+        std::size_t changedCells = 0;
+
+        for (std::size_t i = 0; i < frameBuffer.size(); i++) {
+            if (frameBuffer[i] != previousBuffer[i]) {
+                changedCells++;
+            }
+        }
+
+        if (changedCells == 0) {
+            previousBuffer.swap(frameBuffer);
+            return;
+        }
+
+        if (changedCells * 2 > frameBuffer.size()) {
+            renderFullFrame();
+        } else {
+            renderDifferentialFrame();
+        }
+
         previousBuffer.swap(frameBuffer);
-        return;
+    } catch (...) {
+        firstFrame = true;
+        throw;
     }
-
-    if (changedCells * 2 > frameBuffer.size()) {
-        renderFullFrame();
-    } else {
-        renderDifferentialFrame();
-    }
-
-    previousBuffer.swap(frameBuffer);
-    std::cout.flush();
 }
 
 void Console::renderFullFrame() {
     std::string output;
     output.reserve(frameBuffer.size() * 5);
 
-    Colour currentForeground(255, 255, 255);
-    Colour currentBackground(12, 12, 12);
+    Colour currentForeground = Colours::DefaultForeground;
+    Colour currentBackground = Colours::DefaultBackground;
     bool colourInitialized = false;
 
     for (int y = 0; y < frameHeight; y++) {
         output += cursorPosition(0, y);
 
         for (int x = 0; x < frameWidth; x++) {
-            const Cell& cell = frameBuffer[static_cast<std::size_t>(y * frameWidth + x)];
+            const std::size_t index =
+                static_cast<std::size_t>(y) * static_cast<std::size_t>(frameWidth) +
+                static_cast<std::size_t>(x);
+            const Cell& cell = frameBuffer[index];
 
             if (!colourInitialized || cell.foreground != currentForeground) {
                 output += cell.foreground.foreground();
@@ -615,23 +599,24 @@ void Console::renderFullFrame() {
     }
 
     output += Colour::RESET;
-    std::cout << output;
+    writeOutput(output);
 }
 
 void Console::renderDifferentialFrame() {
     std::string output;
-
-    Colour currentForeground(255, 255, 255);
-    Colour currentBackground(12, 12, 12);
+    Colour currentForeground = Colours::DefaultForeground;
+    Colour currentBackground = Colours::DefaultBackground;
     bool colourInitialized = false;
 
     for (int y = 0; y < frameHeight; y++) {
         int x = 0;
 
         while (x < frameWidth) {
-            const int index = y * frameWidth + x;
+            const std::size_t index =
+                static_cast<std::size_t>(y) * static_cast<std::size_t>(frameWidth) +
+                static_cast<std::size_t>(x);
 
-            if (frameBuffer[static_cast<std::size_t>(index)] == previousBuffer[static_cast<std::size_t>(index)]) {
+            if (frameBuffer[index] == previousBuffer[index]) {
                 x++;
                 continue;
             }
@@ -639,9 +624,11 @@ void Console::renderDifferentialFrame() {
             output += cursorPosition(x, y);
 
             while (x < frameWidth) {
-                const int runIndex = y * frameWidth + x;
-                const Cell& currentCell = frameBuffer[static_cast<std::size_t>(runIndex)];
-                const Cell& previousCell = previousBuffer[static_cast<std::size_t>(runIndex)];
+                const std::size_t runIndex =
+                    static_cast<std::size_t>(y) * static_cast<std::size_t>(frameWidth) +
+                    static_cast<std::size_t>(x);
+                const Cell& currentCell = frameBuffer[runIndex];
+                const Cell& previousCell = previousBuffer[runIndex];
 
                 if (currentCell == previousCell) {
                     break;
@@ -666,25 +653,34 @@ void Console::renderDifferentialFrame() {
 
     if (!output.empty()) {
         output += Colour::RESET;
-        std::cout << output;
+        writeOutput(output);
+    }
+}
+
+void Console::writeOutput(const std::string& output) {
+    if (output.empty()) {
+        return;
+    }
+
+    errno = 0;
+    std::cout.write(output.data(), static_cast<std::streamsize>(output.size()));
+    std::cout.flush();
+
+    if (!std::cout.good()) {
+        throw TerminalError(
+            TerminalErrorCode::WriteOutputFailed,
+            "terminalTool could not write or flush terminal output.",
+            static_cast<std::uint32_t>(errno)
+        );
     }
 }
 
 bool Console::isInsideFrame(const int x, const int y) {
-    return
-        x >= 0 &&
-        y >= 0 &&
-        x < frameWidth &&
-        y < frameHeight;
+    return x >= 0 && y >= 0 && x < frameWidth && y < frameHeight;
 }
 
 Console::Rect Console::frameRect() {
-    return Rect {
-        0,
-        0,
-        frameWidth,
-        frameHeight
-    };
+    return Rect { 0, 0, frameWidth, frameHeight };
 }
 
 Console::Rect Console::intersect(const Rect& first, const Rect& second) {
@@ -693,12 +689,7 @@ Console::Rect Console::intersect(const Rect& first, const Rect& second) {
     const int right = std::min(first.x + first.width, second.x + second.width);
     const int bottom = std::min(first.y + first.height, second.y + second.height);
 
-    return Rect {
-        left,
-        top,
-        std::max(0, right - left),
-        std::max(0, bottom - top)
-    };
+    return Rect { left, top, std::max(0, right - left), std::max(0, bottom - top) };
 }
 
 Console::BoxCharacters Console::boxCharacters(const BoxStyle style) {
@@ -716,10 +707,7 @@ Console::BoxCharacters Console::boxCharacters(const BoxStyle style) {
 }
 
 std::string Console::cursorPosition(const int x, const int y) {
-    return
-        "\033[" +
-        std::to_string(y + 1) + ";" +
-        std::to_string(x + 1) + "H";
+    return "\033[" + std::to_string(y + 1) + ";" + std::to_string(x + 1) + "H";
 }
 
 std::string Console::encodeUtf8(const char32_t character) {
@@ -783,6 +771,5 @@ std::vector<char32_t> Console::decodeUtf8(const std::string& text) {
 
     return result;
 }
-
 
 } // namespace tt

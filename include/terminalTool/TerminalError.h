@@ -1,6 +1,6 @@
 /**
  * @file TerminalError.h
- * @brief Declares terminalTool initialization and terminal-operation errors.
+ * @brief Declares terminalTool initialization and runtime terminal errors.
  *
  * SPDX-License-Identifier: MPL-2.0
  * Copyright (c) 2026 Ataerk YILDIRIM
@@ -18,27 +18,33 @@ namespace tt {
  * @brief Identifies the operation that caused a TerminalError.
  */
 enum class TerminalErrorCode {
-    SessionAlreadyActive,       ///< A second TerminalSession was requested.
-    InvalidOutputHandle,        ///< The standard output handle is invalid.
-    InvalidInputHandle,         ///< The standard input handle is invalid.
-    OutputIsNotTerminal,        ///< Standard output is not an interactive terminal.
-    InputIsNotTerminal,         ///< Standard input is not an interactive terminal.
-    QueryTerminalSizeFailed,    ///< The visible terminal dimensions could not be read.
-    SetOutputCodePageFailed,    ///< The Windows output code page could not be changed.
-    SetInputCodePageFailed,     ///< The Windows input code page could not be changed.
-    ConfigureOutputModeFailed,  ///< ANSI output mode could not be enabled.
-    ConfigureInputModeFailed,   ///< Console input mode could not be configured.
-    InstallControlHandlerFailed,///< The Windows console control handler could not be installed.
-    SetTitleFailed,             ///< The terminal title could not be changed.
-    FrameBufferInitializationFailed ///< The terminal framebuffer could not be created.
+    SessionAlreadyActive,        ///< A second TerminalSession was requested.
+    InvalidOutputHandle,         ///< The standard output handle is invalid.
+    InvalidInputHandle,          ///< The standard input handle is invalid.
+    OutputIsNotTerminal,         ///< Standard output is not an interactive terminal.
+    InputIsNotTerminal,          ///< Standard input is not an interactive terminal.
+    QueryTerminalSizeFailed,     ///< The visible terminal dimensions could not be read.
+    QueryTitleFailed,            ///< The original Windows terminal title could not be read.
+    SetOutputCodePageFailed,     ///< The Windows output code page could not be changed.
+    SetInputCodePageFailed,      ///< The Windows input code page could not be changed.
+    ConfigureOutputModeFailed,   ///< ANSI output mode could not be enabled.
+    ConfigureInputModeFailed,    ///< Console input mode could not be configured.
+    InstallControlHandlerFailed, ///< The Windows console control handler could not be installed.
+    SetTitleFailed,              ///< The terminal title could not be changed.
+    FrameBufferInitializationFailed, ///< The initial terminal framebuffer could not be created.
+    FrameBufferResizeFailed,     ///< A resized terminal framebuffer could not be created.
+    FlushInputFailed,            ///< Pending console input could not be discarded.
+    QueryInputEventCountFailed,  ///< The number of pending input events could not be queried.
+    ReadInputFailed,             ///< Console input events could not be read.
+    WriteOutputFailed            ///< Terminal output could not be written or flushed.
 };
 
 /**
- * @brief Exception thrown when terminalTool cannot initialize or query the terminal.
+ * @brief Exception thrown when terminalTool cannot complete a terminal operation.
  *
  * The exception stores both a portable TerminalErrorCode and an optional native
  * operating-system error value. On Windows, nativeErrorCode() normally contains
- * the value returned by GetLastError(). On POSIX systems it normally contains
+ * a value returned by GetLastError(). On POSIX systems it normally contains
  * errno. A value of zero means that no native code was available.
  */
 class TerminalError : public std::runtime_error {

@@ -16,12 +16,17 @@
 
 namespace tt {
 
+class TerminalSession;
+
 /**
  * @brief Static cell-based terminal framebuffer and drawing API.
  *
  * Call beginFrame(), issue drawing commands, and then call endFrame(). The
- * renderer compares the current framebuffer with the previous one and chooses
- * either a complete or differential terminal update.
+ * renderer compares the current framebuffer with the previously presented one
+ * and chooses either a complete or differential terminal update.
+ *
+ * Framebuffer lifetime is owned exclusively by TerminalSession. Applications
+ * cannot initialize, resize, or shut it down directly.
  */
 class Console {
 public:
@@ -62,10 +67,12 @@ public:
     };
 
 private:
+    friend class TerminalSession;
+
     struct Cell {
         char32_t character = U' ';
-        Colour foreground = Colour(255, 255, 255);
-        Colour background = Colour(12, 12, 12);
+        Colour foreground = Colours::DefaultForeground;
+        Colour background = Colours::DefaultBackground;
 
         bool operator==(const Cell& other) const;
         bool operator!=(const Cell& other) const;
@@ -87,9 +94,16 @@ private:
     static std::vector<Cell> frameBuffer;
     static std::vector<Cell> previousBuffer;
 
+    static void initializeFrameBuffer(int width, int height);
+    static void resizeFrameBuffer(int width, int height);
+    static bool resizeToTerminal();
+    static void shutdownFrameBuffer() noexcept;
+
     static void renderFullFrame();
     static void renderDifferentialFrame();
+    static void writeOutput(const std::string& output);
 
+    [[nodiscard]] static std::size_t checkedCellCount(int width, int height, bool resizing);
     [[nodiscard]] static bool isInsideFrame(int x, int y);
     [[nodiscard]] static Rect frameRect();
     [[nodiscard]] static Rect intersect(const Rect& first, const Rect& second);
@@ -100,50 +114,35 @@ private:
 
 public:
     /**
-     * @brief Creates the framebuffer.
-     * @param width Width in cells. Values less than one are ignored.
-     * @param height Height in cells. Values less than one are ignored.
-     */
-    static void initializeFrameBuffer(int width, int height);
-
-    /**
-     * @brief Recreates the framebuffer at a new size.
-     * @param width New width in cells.
-     * @param height New height in cells.
-     */
-    static void resizeFrameBuffer(int width, int height);
-
-    /**
-     * @brief Resizes the framebuffer to match the visible terminal.
-     * @return `true` when the framebuffer size changed.
-     * @throws TerminalError when the terminal dimensions cannot be queried.
-     */
-    static bool resizeToTerminal();
-
-    /** @brief Releases framebuffer storage and resets renderer state. */
-    static void shutdownFrameBuffer();
-
-    /**
      * @return The current visible terminal size.
      * @throws TerminalError when the terminal dimensions cannot be queried.
      */
     [[nodiscard]] static Size terminalSize();
 
     /** @return Current framebuffer width in cells. */
-    [[nodiscard]] static int getFrameWidth();
+    [[nodiscard]] static int getFrameWidth() noexcept;
 
     /** @return Current framebuffer height in cells. */
-    [[nodiscard]] static int getFrameHeight();
+    [[nodiscard]] static int getFrameHeight() noexcept;
 
-    /** @return `true` after framebuffer initialization and before shutdown. */
-    [[nodiscard]] static bool isActive();
+    /** @return `true` while a TerminalSession owns an initialized framebuffer. */
+    [[nodiscard]] static bool isActive() noexcept;
+
+    /**
+     * @brief Forces the next endFrame() call to redraw the complete framebuffer.
+     *
+     * Call this after external code writes directly to the terminal or whenever
+     * the physical terminal contents may no longer match terminalTool's stored
+     * previous frame.
+     */
+    static void invalidate() noexcept;
 
     /**
      * @brief Clears the current framebuffer with one foreground/background pair.
      * @param foreground Default foreground colour for empty cells.
      * @param background Default background colour for empty cells.
      */
-    static void beginFrame(Colour foreground = Colour(255, 255, 255), Colour background = Colour(12, 12, 12));
+    static void beginFrame(Colour foreground = Colours::DefaultForeground, Colour background = Colours::DefaultBackground);
 
     /**
      * @brief Draws one Unicode code point into a framebuffer cell.
@@ -153,7 +152,7 @@ public:
      * @param foreground Foreground colour.
      * @param background Background colour.
      */
-    static void drawCell(int x, int y, char32_t character, Colour foreground = Colour(255, 255, 255), Colour background = Colour(12, 12, 12));
+    static void drawCell(int x, int y, char32_t character, Colour foreground = Colours::DefaultForeground, Colour background = Colours::DefaultBackground);
 
     /**
      * @brief Draws UTF-8 text clipped to the framebuffer.
@@ -163,7 +162,7 @@ public:
      * @param foreground Foreground colour.
      * @param background Background colour.
      */
-    static void drawText(int x, int y, const std::string& text, Colour foreground = Colour(255, 255, 255), Colour background = Colour(12, 12, 12));
+    static void drawText(int x, int y, const std::string& text, Colour foreground = Colours::DefaultForeground, Colour background = Colours::DefaultBackground);
 
     /**
      * @brief Draws UTF-8 text clipped to a rectangle.
@@ -174,7 +173,7 @@ public:
      * @param foreground Foreground colour.
      * @param background Background colour.
      */
-    static void drawTextClipped(int x, int y, const std::string& text, const Rect& clip, Colour foreground = Colour(255, 255, 255), Colour background = Colour(12, 12, 12));
+    static void drawTextClipped(int x, int y, const std::string& text, const Rect& clip, Colour foreground = Colours::DefaultForeground, Colour background = Colours::DefaultBackground);
 
     /**
      * @brief Draws one aligned line of UTF-8 text inside a rectangle.
@@ -184,7 +183,7 @@ public:
      * @param foreground Foreground colour.
      * @param background Background colour.
      */
-    static void drawTextAligned(const Rect& area, const std::string& text, TextAlignment alignment, Colour foreground = Colour(255, 255, 255), Colour background = Colour(12, 12, 12));
+    static void drawTextAligned(const Rect& area, const std::string& text, TextAlignment alignment, Colour foreground = Colours::DefaultForeground, Colour background = Colours::DefaultBackground);
 
     /**
      * @brief Draws word-wrapped UTF-8 text inside a rectangle.
@@ -195,60 +194,28 @@ public:
      * @param background Background colour.
      * @return Number of visible lines drawn.
      */
-    static int drawWrappedText(const Rect& area, const std::string& text, TextAlignment alignment = TextAlignment::Left, Colour foreground = Colour(255, 255, 255), Colour background = Colour(12, 12, 12));
+    static int drawWrappedText(const Rect& area, const std::string& text, TextAlignment alignment = TextAlignment::Left, Colour foreground = Colours::DefaultForeground, Colour background = Colours::DefaultBackground);
+
+    /** @brief Draws a horizontal line of repeated cells. */
+    static void drawHorizontalLine(int x, int y, int width, char32_t character = U'─', Colour foreground = Colours::DefaultForeground, Colour background = Colours::DefaultBackground);
+
+    /** @brief Draws a vertical line of repeated cells. */
+    static void drawVerticalLine(int x, int y, int height, char32_t character = U'│', Colour foreground = Colours::DefaultForeground, Colour background = Colours::DefaultBackground);
+
+    /** @brief Fills the visible part of a rectangle with one cell value. */
+    static void fillRect(const Rect& area, char32_t character = U' ', Colour foreground = Colours::DefaultForeground, Colour background = Colours::DefaultBackground);
+
+    /** @brief Draws a border around a rectangle. */
+    static void drawBox(const Rect& area, Colour foreground = Colours::DefaultForeground, Colour background = Colours::DefaultBackground, BoxStyle style = BoxStyle::Single);
+
+    /** @brief Draws a filled, bordered panel with an optional title. */
+    static void drawPanel(const Rect& area, const std::string& title, Colour border = Colour(180, 180, 180), Colour foreground = Colours::DefaultForeground, Colour background = Colour(20, 20, 20), BoxStyle style = BoxStyle::Single);
 
     /**
-     * @brief Draws a horizontal line of repeated cells.
-     * @param x Starting horizontal coordinate.
-     * @param y Row coordinate.
-     * @param width Number of cells to draw.
-     * @param character Unicode code point repeated along the line.
-     * @param foreground Foreground colour.
-     * @param background Background colour.
+     * @brief Presents the current framebuffer to the terminal.
+     * @throws TerminalError with TerminalErrorCode::WriteOutputFailed when the
+     *         rendered frame cannot be written or flushed.
      */
-    static void drawHorizontalLine(int x, int y, int width, char32_t character = U'─', Colour foreground = Colour(255, 255, 255), Colour background = Colour(12, 12, 12));
-
-    /**
-     * @brief Draws a vertical line of repeated cells.
-     * @param x Column coordinate.
-     * @param y Starting vertical coordinate.
-     * @param height Number of cells to draw.
-     * @param character Unicode code point repeated along the line.
-     * @param foreground Foreground colour.
-     * @param background Background colour.
-     */
-    static void drawVerticalLine(int x, int y, int height, char32_t character = U'│', Colour foreground = Colour(255, 255, 255), Colour background = Colour(12, 12, 12));
-
-    /**
-     * @brief Fills the visible part of a rectangle with one cell value.
-     * @param area Rectangle to fill.
-     * @param character Unicode code point written into every visible cell.
-     * @param foreground Foreground colour.
-     * @param background Background colour.
-     */
-    static void fillRect(const Rect& area, char32_t character = U' ', Colour foreground = Colour(255, 255, 255), Colour background = Colour(12, 12, 12));
-
-    /**
-     * @brief Draws a border around a rectangle.
-     * @param area Border rectangle.
-     * @param foreground Border colour.
-     * @param background Cell background colour.
-     * @param style Border character set.
-     */
-    static void drawBox(const Rect& area, Colour foreground = Colour(255, 255, 255), Colour background = Colour(12, 12, 12), BoxStyle style = BoxStyle::Single);
-
-    /**
-     * @brief Draws a filled, bordered panel with an optional title.
-     * @param area Panel rectangle.
-     * @param title UTF-8 title drawn in the top border.
-     * @param border Border and title colour.
-     * @param foreground Foreground colour used for the panel fill.
-     * @param background Panel background colour.
-     * @param style Border style.
-     */
-    static void drawPanel(const Rect& area, const std::string& title, Colour border = Colour(180, 180, 180), Colour foreground = Colour(255, 255, 255), Colour background = Colour(20, 20, 20), BoxStyle style = BoxStyle::Single);
-
-    /** @brief Presents the current framebuffer to the terminal. */
     static void endFrame();
 };
 

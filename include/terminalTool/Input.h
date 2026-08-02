@@ -15,6 +15,8 @@
 
 namespace tt {
 
+class TerminalSession;
+
 /**
  * @brief Keyboard keys recognised by terminalTool's Windows console backend.
  *
@@ -214,6 +216,7 @@ enum class Key : std::size_t {
  */
 class Input {
 private:
+    friend class TerminalSession;
     static constexpr std::size_t KEY_COUNT = static_cast<std::size_t>(Key::Count);
 
     static std::array<bool, KEY_COUNT> current;
@@ -230,15 +233,18 @@ private:
     static void appendTextCodeUnit(char16_t codeUnit, std::uint16_t repeatCount);
     static void appendUtf8(char32_t character);
 
-public:
     /** @brief Resets input state and clears pending Windows console events. */
     static void initialize();
 
-    /** @brief Reads available input events and refreshes per-frame states. */
-    static void update();
-
     /** @brief Clears all held, pressed, released, focus, and text state. */
     static void reset() noexcept;
+
+public:
+    /**
+     * @brief Reads available input events and refreshes per-frame states.
+     * @throws TerminalError when the console input handle or event stream fails.
+     */
+    static void update();
 
     /**
      * @param key Key to test.

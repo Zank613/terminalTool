@@ -8,7 +8,10 @@
 
 #include "terminalTool/Input.h"
 
+#include "terminalTool/TerminalError.h"
+
 #include <algorithm>
+#include <cstdint>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -33,8 +36,20 @@ void Input::initialize() {
 #ifdef _WIN32
     const HANDLE inputHandle = GetStdHandle(STD_INPUT_HANDLE);
 
-    if (inputHandle != INVALID_HANDLE_VALUE && inputHandle != nullptr) {
-        FlushConsoleInputBuffer(inputHandle);
+    if (inputHandle == INVALID_HANDLE_VALUE || inputHandle == nullptr) {
+        throw TerminalError(
+            TerminalErrorCode::InvalidInputHandle,
+            "terminalTool could not obtain the standard input handle while initializing input.",
+            static_cast<std::uint32_t>(GetLastError())
+        );
+    }
+
+    if (!FlushConsoleInputBuffer(inputHandle)) {
+        throw TerminalError(
+            TerminalErrorCode::FlushInputFailed,
+            "terminalTool could not discard pending Windows console input.",
+            static_cast<std::uint32_t>(GetLastError())
+        );
     }
 #endif
 }
@@ -48,7 +63,11 @@ void Input::update() {
     const HANDLE inputHandle = GetStdHandle(STD_INPUT_HANDLE);
 
     if (inputHandle == INVALID_HANDLE_VALUE || inputHandle == nullptr) {
-        return;
+        throw TerminalError(
+            TerminalErrorCode::InvalidInputHandle,
+            "terminalTool could not obtain the standard input handle while reading input.",
+            static_cast<std::uint32_t>(GetLastError())
+        );
     }
 
     constexpr DWORD MAX_EVENTS = 128;
@@ -57,7 +76,15 @@ void Input::update() {
     while (true) {
         DWORD pendingEvents = 0;
 
-        if (!GetNumberOfConsoleInputEvents(inputHandle, &pendingEvents) || pendingEvents == 0) {
+        if (!GetNumberOfConsoleInputEvents(inputHandle, &pendingEvents)) {
+            throw TerminalError(
+                TerminalErrorCode::QueryInputEventCountFailed,
+                "terminalTool could not query pending Windows console input events.",
+                static_cast<std::uint32_t>(GetLastError())
+            );
+        }
+
+        if (pendingEvents == 0) {
             break;
         }
 
@@ -65,7 +92,11 @@ void Input::update() {
         DWORD eventsRead = 0;
 
         if (!ReadConsoleInputW(inputHandle, events, eventsToRead, &eventsRead)) {
-            break;
+            throw TerminalError(
+                TerminalErrorCode::ReadInputFailed,
+                "terminalTool could not read Windows console input events.",
+                static_cast<std::uint32_t>(GetLastError())
+            );
         }
 
         for (DWORD i = 0; i < eventsRead; i++) {

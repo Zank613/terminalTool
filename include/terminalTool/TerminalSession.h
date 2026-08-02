@@ -8,14 +8,27 @@
 
 #pragma once
 
-#include <atomic>
+#include <memory>
 #include <string>
 
-#ifdef _WIN32
-#include <windows.h>
-#endif
-
 namespace tt {
+
+/**
+ * @brief Options applied when a TerminalSession is created.
+ */
+struct TerminalOptions {
+    /** @brief UTF-8 terminal title. An empty string leaves the title unchanged. */
+    std::string title = "terminalTool";
+
+    /**
+     * @brief Use the terminal's alternate screen buffer when available.
+     *
+     * When enabled, the original terminal contents reappear when the session
+     * ends. Disable this when the application's output should remain visible
+     * in the normal terminal history after exit.
+     */
+    bool alternateScreen = true;
+};
 
 /**
  * @brief Configures and restores the process's one interactive terminal session.
@@ -23,41 +36,31 @@ namespace tt {
  * Exactly one TerminalSession may exist at a time. Constructing another while
  * one is active throws TerminalError with TerminalErrorCode::SessionAlreadyActive.
  * Successful construction initializes Console and Input. Destruction restores
- * cursor visibility, line wrapping, terminal modes, and Windows code pages.
+ * cursor visibility, line wrapping, terminal modes, the original Windows title,
+ * Windows code pages, and the normal screen buffer when alternateScreen is used.
+ *
+ * All TerminalSession, Console, and Input operations are intended to be called
+ * from the thread that owns the terminal.
  */
 class TerminalSession {
 private:
-    bool active = false;
-    static std::atomic<TerminalSession*> activeSession;
-
-#ifdef _WIN32
-    HANDLE outputHandle = INVALID_HANDLE_VALUE;
-    HANDLE inputHandle = INVALID_HANDLE_VALUE;
-    DWORD originalOutputMode = 0;
-    DWORD originalInputMode = 0;
-    UINT originalOutputCodePage = 0;
-    UINT originalInputCodePage = 0;
-    bool outputModeSaved = false;
-    bool inputModeSaved = false;
-    bool outputCodePageChanged = false;
-    bool inputCodePageChanged = false;
-    bool controlHandlerInstalled = false;
-
-    static BOOL WINAPI controlHandler(DWORD eventType);
-    void emergencyRestore() const noexcept;
-#endif
-
-    void configure(const std::string& title);
-    void restore() noexcept;
-    void restoreSystemState() noexcept;
+    class Implementation;
+    std::unique_ptr<Implementation> implementation;
 
 public:
     /**
      * @brief Starts the process's single interactive terminal session.
-     * @param title Window title used on Windows. UTF-8 is accepted.
+     * @param title UTF-8 title. The alternate screen buffer is enabled.
      * @throws TerminalError when another session exists or terminal setup fails.
      */
     explicit TerminalSession(const std::string& title = "terminalTool");
+
+    /**
+     * @brief Starts a terminal session with explicit options.
+     * @param options Session configuration.
+     * @throws TerminalError when another session exists or terminal setup fails.
+     */
+    explicit TerminalSession(const TerminalOptions& options);
 
     /** @brief Restores the original terminal state. */
     ~TerminalSession();
@@ -77,7 +80,8 @@ public:
     /**
      * @brief Checks for terminal resizing.
      * @return `true` when the framebuffer dimensions changed.
-     * @throws TerminalError when the visible terminal size cannot be queried.
+     * @throws TerminalError when the terminal size cannot be queried or the
+     *         resized framebuffer cannot be allocated.
      */
     [[nodiscard]] bool update();
 
