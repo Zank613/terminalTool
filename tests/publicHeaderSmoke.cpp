@@ -1,6 +1,6 @@
 /**
  * @file publicHeaderSmoke.cpp
- * @brief Verifies that the complete public API can be included by itself.
+ * @brief Verifies that the complete public API can be included alone.
  *
  * SPDX-License-Identifier: MPL-2.0
  * Copyright (c) 2026 Ataerk YILDIRIM
@@ -18,10 +18,17 @@
 #endif
 
 int main() {
-    const tt::TerminalOptions options { "terminalTool", false };
-    const tt::Colour colour = tt::Colours::BrightCyan;
-    const tt::Console::Rect rectangle { 0, 0, 10, 5 };
-    const tt::DeltaTime deltaTime;
+    tt::TerminalOptions options;
+    options.title = "terminalTool";
+    options.enableFocusEvents = true;
 
-    return options.title.empty() || colour.getBlue() == 0 || !rectangle.contains(0, 0) || deltaTime.seconds() != 0.0;
+    const tt::Console::Rect rectangle { 0, 0, 10, 5 };
+    const tt::ModifierState modifiers {};
+    const tt::InputEvent event {};
+
+    return
+        options.title.empty() ||
+        !rectangle.contains(0, 0) ||
+        modifiers.shift() ||
+        event.key.key != tt::Key::Unknown;
 }

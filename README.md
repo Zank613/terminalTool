@@ -1,270 +1,163 @@
-# terminalTool 0.2.2
+# terminalTool 0.3.0
 
-`terminalTool` is a small C++17 terminal rendering and input library for
-terminal-based games and interactive tools. Its public API lives in the `tt`
-namespace and the library is deliberately built as a static library.
+`terminalTool` is a compact C++17 static library for terminal games and
+interactive terminal tools. It provides a cell framebuffer, true-colour ANSI
+rendering, cross-platform keyboard input, raw input events, focus reporting,
+clipping regions, terminal restoration, and delta time. Its public API lives in
+the `tt` namespace.
 
 ```cpp
 #include <terminalTool/terminalTool.h>
 ```
 
-## 0.2.2 highlights
+## 0.3.0 highlights
 
-- `tt::DeltaTime` measures elapsed steady-clock time between frames
-- Delta time is available in seconds and milliseconds
-- The timer can be reset without reconstructing it
-- No frame limiter or game-loop ownership is imposed on applications
+- FIFO `tt::InputEvent` queue alongside the existing state API
+- Rich key event metadata and complete modifier state
+- Layout-neutral OEM key names with backward-compatible aliases
+- Focus events and focus transition queries
+- Expanded `tt::TerminalOptions`
+- Windows, Linux, and macOS keyboard backends
+- POSIX signal restoration
+- Internal platform abstraction
+- Incremental UTF-8/CSI/SS3 escape-sequence parser
+- Nested clipping regions and RAII `tt::Console::ScopedClip`
+- Expanded tests, CI, Doxygen comments, and usage guides
 
-## Minimal use
+## Minimal loop
 
 ```cpp
-#include <iostream>
-
 #include <terminalTool/terminalTool.h>
 
 int main() {
-    try {
-        const tt::TerminalOptions options {
-            "My Game",
-            true // Use the alternate screen buffer.
-        };
+    tt::TerminalOptions options;
+    options.title = "My Game";
+    options.enableFocusEvents = true;
 
-        tt::TerminalSession terminal(options);
-        bool running = true;
+    tt::TerminalSession terminal(options);
+    tt::DeltaTime deltaTime;
+    bool running = true;
 
-        while (running) {
-            (void) terminal.update();
-            tt::Input::update();
+    while (running) {
+        const double seconds = deltaTime.update();
+        (void) terminal.update();
+        tt::Input::update();
 
-            if (tt::Input::isPressed(tt::Key::Escape)) {
-                running = false;
-            }
-
-            tt::Console::beginFrame(
-                tt::Colours::BrightWhite,
-                tt::Colours::DefaultBackground
-            );
-
-            tt::Console::drawText(
-                2,
-                2,
-                "terminalTool is running",
-                tt::Colours::BrightYellow
-            );
-
-            tt::Console::endFrame();
+        if (tt::Input::isPressed(tt::Key::Escape)) {
+            running = false;
         }
-    } catch (const tt::TerminalError& error) {
-        std::cerr
-            << error.what()
-            << " (native error " << error.nativeErrorCode() << ")\n";
-        return 1;
+
+        tt::Console::beginFrame();
+        tt::Console::drawText(2, 2, "Frame seconds: " + std::to_string(seconds));
+        tt::Console::endFrame();
     }
 }
 ```
 
-## Delta time
+## Raw events
 
-Create one `tt::DeltaTime` object immediately before the main loop and call
-`update()` once near the beginning of every frame:
+Unconsumed events persist in FIFO order across frames:
 
 ```cpp
-tt::DeltaTime deltaTime;
-
-while (running) {
-    const double frameSeconds = deltaTime.update();
-
-    playerX += movementSpeed * frameSeconds;
-
-    // Input, game update, drawing, and optional frame limiting remain yours.
+while (const std::optional<tt::InputEvent> event = tt::Input::pollEvent()) {
+    if (event->type == tt::InputEventType::KeyPressed) {
+        const tt::Key key = event->key.key;
+        const bool repeated = event->key.repeated;
+        const std::uint16_t scanCode = event->key.scanCode;
+        const tt::ModifierState modifiers = event->key.modifiers;
+    }
 }
 ```
 
-The measured value is also retained for later access:
+The convenient state API remains available:
 
 ```cpp
-const double seconds = deltaTime.seconds();
-const double milliseconds = deltaTime.milliseconds();
-
-deltaTime.reset(); // Restarts measurement and stores a zero delta.
+tt::Input::isPressed(tt::Key::Space);
+tt::Input::isHeld(tt::Key::W);
+tt::Input::isReleased(tt::Key::F1);
+tt::Input::textInput();
+tt::Input::isFocused();
+tt::Input::focusGained();
+tt::Input::focusLost();
 ```
 
-`tt::DeltaTime` uses `std::chrono::steady_clock`. It does not sleep, cap the
-frame rate, clamp long frames, or own the game loop. A game may clamp unusually
-large values itself when that behaviour is appropriate.
+POSIX terminals normally do not transmit physical key-release events.
+terminalTool therefore represents each decoded POSIX key sequence as a
+press/release pulse. `isPressed()` and native repeat sequences work normally;
+continuous `isHeld()` state is naturally strongest on Windows.
+
+## Physical keys and text
+
+OEM names are layout-neutral:
+
+```cpp
+tt::Key::Oem1
+tt::Key::Oem2
+tt::Key::Oem102
+```
+
+Compatibility aliases such as `tt::Key::Semicolon` remain. Use `Key` for
+bindings and `textInput()`/`TextEntered` for the actual character produced by
+the user's keyboard layout.
+
+## Clipping
+
+```cpp
+const tt::Console::Rect panelContents { 3, 4, 30, 10 };
+
+{
+    tt::Console::ScopedClip clip(panelContents);
+    drawLargeMapOrList();
+} // Previous clip is restored here.
+```
+
+Manual nesting is also available through `pushClip()`, `popClip()`,
+`clearClips()`, and `currentClip()`.
 
 ## Terminal options
 
 ```cpp
-const tt::TerminalOptions options {
-    "My Game",
-    true
-};
-
-tt::TerminalSession terminal(options);
+tt::TerminalOptions options;
+options.title = "My Game";
+options.alternateScreen = true;
+options.hideCursor = true;
+options.disableLineWrapping = true;
+options.enableFocusEvents = true;
+options.clearOnStart = true;
+options.clearOnExit = false;
+options.installSignalHandlers = true;
+options.restoreTitle = true;
 ```
 
-`alternateScreen = true` enters the terminal's alternate screen buffer. The
-normal terminal contents return when the session ends. Set it to `false` when
-the rendered output should remain in the normal terminal history.
+## Platform behavior
 
-The original constructor remains available and enables the alternate screen:
+- Windows uses `ReadConsoleInputW` and provides real key-down/key-up events,
+  repeat counts, scan codes, left/right modifiers, lock state, and focus events.
+- Linux and macOS use `termios`, non-blocking reads, and the shared escape parser.
+- POSIX emergency restoration covers SIGINT, SIGTERM, SIGHUP, and SIGQUIT.
+- SIGWINCH is observed while `TerminalSession::update()` remains the explicit
+  resize point.
 
-```cpp
-tt::TerminalSession terminal("My Game");
-```
+See `docs/input.md`, `docs/platforms.md`, `docs/clipping.md`, and
+`docs/migration-0.2-to-0.3.md` for detailed contracts and examples.
 
-## Lifetime ownership
-
-Exactly one `tt::TerminalSession` may exist in a process. A second construction
-throws `tt::TerminalErrorCode::SessionAlreadyActive`.
-
-Framebuffer initialization, framebuffer resizing, framebuffer shutdown, input
-initialization, and input reset are internal operations owned by
-`TerminalSession`. Applications use only the public drawing, presentation, and
-input-query API.
-
-All `TerminalSession`, `Console`, and `Input` calls should be made from the
-thread that owns the terminal.
-
-## Runtime errors
-
-Initialization and runtime terminal operations throw `tt::TerminalError`.
-Important runtime categories include:
-
-```cpp
-tt::TerminalErrorCode::FrameBufferResizeFailed
-tt::TerminalErrorCode::FlushInputFailed
-tt::TerminalErrorCode::QueryInputEventCountFailed
-tt::TerminalErrorCode::ReadInputFailed
-tt::TerminalErrorCode::WriteOutputFailed
-```
-
-The exception provides:
-
-- `error.code()` — portable terminalTool error category
-- `error.nativeErrorCode()` — Windows `GetLastError()` or POSIX `errno` when available
-- `error.what()` — human-readable description
-
-## Forced redraws
-
-Call `tt::Console::invalidate()` when external code has written directly to the
-terminal or when the physical terminal contents may no longer match the stored
-previous framebuffer:
-
-```cpp
-if (tt::Input::isPressed(tt::Key::F5)) {
-    tt::Console::invalidate();
-}
-```
-
-The next `tt::Console::endFrame()` performs a complete redraw.
-
-## Framebuffer resizing
-
-`tt::TerminalSession::update()` checks the visible terminal size and safely
-replaces both framebuffers when it changes:
-
-```cpp
-if (terminal.update()) {
-    // Recalculate cached game layouts here.
-}
-```
-
-The new buffers are allocated before any live dimensions or storage are
-changed. If allocation fails, the old framebuffer remains valid and a
-`FrameBufferResizeFailed` exception is thrown.
-
-## Keyboard input
-
-Call `tt::Input::update()` exactly once near the start of every frame.
-
-```cpp
-if (tt::Input::isPressed(tt::Key::F1)) {
-    openHelp();
-}
-
-if (tt::Input::isHeld(tt::Key::LeftShift) &&
-    tt::Input::isHeld(tt::Key::W)) {
-    sprintForward();
-}
-
-if (tt::Input::isReleased(tt::Key::Space)) {
-    releaseChargedAction();
-}
-```
-
-The Windows backend covers letters, number-row keys, F1-F24, navigation,
-left/right modifiers, punctuation, the complete numpad, IME/international keys,
-browser/media controls, application launch keys, and Windows legacy keys.
-
-Printable text is exposed separately as UTF-8:
-
-```cpp
-std::string command;
-command += tt::Input::textInput();
-```
-
-## Built-in colours
-
-Every unique RGB value shares cached foreground and background ANSI strings.
-A conventional 16-colour RGB palette is available under `tt::Colours`:
-
-```cpp
-tt::Colours::Red
-tt::Colours::BrightYellow
-tt::Colours::BrightCyan
-tt::Colours::DefaultForeground
-tt::Colours::DefaultBackground
-```
-
-Custom true colours remain available:
-
-```cpp
-const tt::Colour sugarGold(235, 190, 90);
-```
-
-## CMake target
-
-The exported and in-tree target is:
+## CMake
 
 ```cmake
-target_link_libraries(MyGame PRIVATE terminalTool::terminalTool)
-```
-
-It remains a static library even when a parent project sets
-`BUILD_SHARED_LIBS` to `ON`.
-
-### Use with `add_subdirectory`
-
-```cmake
-set(TERMINALTOOL_BUILD_EXAMPLE OFF CACHE BOOL "" FORCE)
-set(TERMINALTOOL_BUILD_DOCS OFF CACHE BOOL "" FORCE)
-set(TERMINALTOOL_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-
 add_subdirectory(external/terminalTool)
 target_link_libraries(MyGame PRIVATE terminalTool::terminalTool)
 ```
 
-### Install and use with `find_package`
-
-```sh
-cmake -S . -B build -DTERMINALTOOL_BUILD_EXAMPLE=OFF
-cmake --build build
-cmake --install build --prefix install
-```
-
-A consuming project can then use:
+Or install and consume it:
 
 ```cmake
-find_package(terminalTool 0.2.2 CONFIG REQUIRED)
+find_package(terminalTool 0.3.0 CONFIG REQUIRED)
 target_link_libraries(MyGame PRIVATE terminalTool::terminalTool)
 ```
 
-## Tests
+The library remains static regardless of `BUILD_SHARED_LIBS`.
 
-The project includes self-contained tests that do not require an interactive
-terminal:
+## Tests
 
 ```sh
 cmake -S . -B build -DTERMINALTOOL_BUILD_TESTS=ON
@@ -272,43 +165,20 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-The Windows workflow builds, tests, and installs the project with both MSVC and
-MinGW UCRT64.
+CI covers MSVC, MinGW, Ubuntu GCC, Ubuntu Clang, and macOS AppleClang.
 
-## Doxygen documentation
-
-Every public class, structure, enum, function, and constant is documented. When
-Doxygen is installed, CMake creates a `docs` target:
+## Doxygen
 
 ```sh
 cmake -S . -B build
 cmake --build build --target docs
 ```
 
-The generated entry page is `build/documentation/html/index.html`.
-
-## Version
-
-`Version.h` is generated from the CMake project version:
-
-```cpp
-static_assert(tt::Version::Major == 0);
-static_assert(tt::Version::Minor == 2);
-static_assert(tt::Version::Patch == 2);
-```
-
-## Platform status
-
-- Windows has complete event-based keyboard input and emergency restoration.
-- Rendering and terminal-size queries build on POSIX systems.
-- Non-Windows keyboard input is still intentionally inactive.
-- Unicode code points are currently treated as one terminal cell each. Wide
-  glyphs and combining sequences require a future display-width implementation.
+Generated HTML starts at `build/documentation/html/index.html`.
 
 ## Licence and ownership
 
-terminalTool is distributed under the **Mozilla Public License 2.0**. See
-`LICENSE` for the complete terms and `NOTICE.md` for the project copyright
-notice.
+terminalTool is distributed under the Mozilla Public License 2.0. See
+`LICENSE` and `NOTICE.md`.
 
 Copyright (c) 2026 Ataerk YILDIRIM.

@@ -9,22 +9,14 @@
 #include "terminalTool/Console.h"
 
 #include "terminalTool/TerminalError.h"
+#include "platform/PlatformTerminal.h"
 
 #include <algorithm>
-#include <cerrno>
 #include <cstdint>
-#include <iostream>
 #include <limits>
 #include <new>
 #include <stdexcept>
 #include <utility>
-
-#ifdef _WIN32
-#include <windows.h>
-#else
-#include <sys/ioctl.h>
-#include <unistd.h>
-#endif
 
 namespace tt {
 
@@ -34,6 +26,7 @@ bool Console::frameBufferActive = false;
 bool Console::firstFrame = true;
 std::vector<Console::Cell> Console::frameBuffer;
 std::vector<Console::Cell> Console::previousBuffer;
+std::vector<Console::Rect> Console::clipStack;
 
 bool Console::Rect::contains(const int pointX, const int pointY) const {
     return
@@ -98,6 +91,7 @@ void Console::initializeFrameBuffer(const int width, const int height) {
     frameHeight = height;
     frameBufferActive = true;
     firstFrame = true;
+    clipStack.clear();
 }
 
 void Console::resizeFrameBuffer(const int width, const int height) {
@@ -133,6 +127,7 @@ void Console::resizeFrameBuffer(const int width, const int height) {
     frameWidth = width;
     frameHeight = height;
     firstFrame = true;
+    clipStack.clear();
 }
 
 bool Console::resizeToTerminal() {
@@ -153,49 +148,12 @@ void Console::shutdownFrameBuffer() noexcept {
     frameHeight = 0;
     firstFrame = true;
     frameBufferActive = false;
+    clipStack.clear();
 }
 
 Console::Size Console::terminalSize() {
-#ifdef _WIN32
-    CONSOLE_SCREEN_BUFFER_INFO info {};
-    const HANDLE output = GetStdHandle(STD_OUTPUT_HANDLE);
-
-    if (output == INVALID_HANDLE_VALUE || output == nullptr) {
-        throw TerminalError(
-            TerminalErrorCode::InvalidOutputHandle,
-            "terminalTool could not obtain the standard output handle while querying terminal size.",
-            static_cast<std::uint32_t>(GetLastError())
-        );
-    }
-
-    if (!GetConsoleScreenBufferInfo(output, &info)) {
-        throw TerminalError(
-            TerminalErrorCode::QueryTerminalSizeFailed,
-            "terminalTool could not query the visible Windows console size.",
-            static_cast<std::uint32_t>(GetLastError())
-        );
-    }
-
-    return Size {
-        static_cast<int>(info.srWindow.Right - info.srWindow.Left + 1),
-        static_cast<int>(info.srWindow.Bottom - info.srWindow.Top + 1)
-    };
-#else
-    winsize size {};
-
-    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &size) != 0 || size.ws_col == 0 || size.ws_row == 0) {
-        throw TerminalError(
-            TerminalErrorCode::QueryTerminalSizeFailed,
-            "terminalTool could not query the visible terminal size.",
-            static_cast<std::uint32_t>(errno)
-        );
-    }
-
-    return Size {
-        static_cast<int>(size.ws_col),
-        static_cast<int>(size.ws_row)
-    };
-#endif
+    const detail::TerminalDimensions size = detail::platformTerminalSize();
+    return Size { size.width, size.height };
 }
 
 int Console::getFrameWidth() noexcept {
@@ -216,6 +174,37 @@ void Console::invalidate() noexcept {
     }
 }
 
+Console::ScopedClip::ScopedClip(const Rect& area)
+    : active(true) {
+    Console::pushClip(area);
+}
+
+Console::ScopedClip::~ScopedClip() {
+    if (active) {
+        Console::popClip();
+    }
+}
+
+
+void Console::pushClip(const Rect& area) {
+    const Rect base = activeClip();
+    clipStack.push_back(intersect(base, area));
+}
+
+void Console::popClip() noexcept {
+    if (!clipStack.empty()) {
+        clipStack.pop_back();
+    }
+}
+
+void Console::clearClips() noexcept {
+    clipStack.clear();
+}
+
+Console::Rect Console::currentClip() noexcept {
+    return activeClip();
+}
+
 void Console::beginFrame(const Colour foreground, const Colour background) {
     if (!frameBufferActive) {
         return;
@@ -232,7 +221,7 @@ void Console::drawCell(
     const Colour foreground,
     const Colour background
 ) {
-    if (!frameBufferActive || !isInsideFrame(x, y)) {
+    if (!frameBufferActive || !isInsideFrame(x, y) || !activeClip().contains(x, y)) {
         return;
     }
 
@@ -253,7 +242,7 @@ void Console::drawText(
     const Colour foreground,
     const Colour background
 ) {
-    drawTextClipped(x, y, text, frameRect(), foreground, background);
+    drawTextClipped(x, y, text, activeClip(), foreground, background);
 }
 
 void Console::drawTextClipped(
@@ -268,7 +257,7 @@ void Console::drawTextClipped(
         return;
     }
 
-    const Rect visibleClip = intersect(clip, frameRect());
+    const Rect visibleClip = intersect(intersect(clip, frameRect()), activeClip());
 
     if (visibleClip.width <= 0 || visibleClip.height <= 0) {
         return;
@@ -470,7 +459,7 @@ void Console::fillRect(
     const Colour foreground,
     const Colour background
 ) {
-    const Rect visibleArea = intersect(area, frameRect());
+    const Rect visibleArea = intersect(intersect(area, frameRect()), activeClip());
 
     if (visibleArea.width <= 0 || visibleArea.height <= 0) {
         return;
@@ -658,20 +647,8 @@ void Console::renderDifferentialFrame() {
 }
 
 void Console::writeOutput(const std::string& output) {
-    if (output.empty()) {
-        return;
-    }
-
-    errno = 0;
-    std::cout.write(output.data(), static_cast<std::streamsize>(output.size()));
-    std::cout.flush();
-
-    if (!std::cout.good()) {
-        throw TerminalError(
-            TerminalErrorCode::WriteOutputFailed,
-            "terminalTool could not write or flush terminal output.",
-            static_cast<std::uint32_t>(errno)
-        );
+    if (!output.empty()) {
+        detail::platformWriteOutput(output);
     }
 }
 
@@ -681,6 +658,10 @@ bool Console::isInsideFrame(const int x, const int y) {
 
 Console::Rect Console::frameRect() {
     return Rect { 0, 0, frameWidth, frameHeight };
+}
+
+Console::Rect Console::activeClip() {
+    return clipStack.empty() ? frameRect() : clipStack.back();
 }
 
 Console::Rect Console::intersect(const Rect& first, const Rect& second) {

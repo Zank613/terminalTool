@@ -3,7 +3,7 @@
 Copyright (c) 2026 Ataerk YILDIRIM.
 
 Ataerk YILDIRIM is identified as the original creator and initial copyright
-holder of terminalTool, including version 0.2.2. Copyright ownership is retained
+holder of terminalTool, including version 0.3.0. Copyright ownership is retained
 by the copyright holder; the Mozilla Public License 2.0 grants permissions to
 use, modify, and distribute the covered source code but does not transfer
 ownership.

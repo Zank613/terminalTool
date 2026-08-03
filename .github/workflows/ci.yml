@@ -1,0 +1,126 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  unix:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Ubuntu GCC
+            os: ubuntu-latest
+            compiler: g++
+            cc: gcc
+          - name: Ubuntu Clang
+            os: ubuntu-latest
+            compiler: clang++
+            cc: clang
+          - name: macOS AppleClang
+            os: macos-latest
+            compiler: clang++
+            cc: clang
+    runs-on: ${{ matrix.os }}
+    env:
+      CC: ${{ matrix.cc }}
+      CXX: ${{ matrix.compiler }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S . -B build -DTERMINALTOOL_BUILD_EXAMPLE=ON -DTERMINALTOOL_BUILD_TESTS=ON -DTERMINALTOOL_BUILD_DOCS=OFF
+      - name: Verify generated version
+        run: |
+          grep -q 'Minor = 3' build/generated/terminalTool/Version.h
+          grep -q 'Patch = 0' build/generated/terminalTool/Version.h
+          grep -q 'String = "0.3.0"' build/generated/terminalTool/Version.h
+      - name: Build
+        run: cmake --build build --parallel
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+      - name: Install
+        run: cmake --install build --prefix install
+
+  msvc:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S . -B build -DTERMINALTOOL_BUILD_EXAMPLE=ON -DTERMINALTOOL_BUILD_TESTS=ON -DTERMINALTOOL_BUILD_DOCS=OFF
+      - name: Verify generated version
+        shell: pwsh
+        run: |
+          $header = Get-Content build/generated/terminalTool/Version.h -Raw
+          if ($header -notmatch 'Minor = 3' -or $header -notmatch 'Patch = 0' -or $header -notmatch 'String = "0.3.0"') {
+            throw "Generated Version.h does not contain terminalTool 0.3.0"
+          }
+      - name: Build
+        run: cmake --build build --config Release --parallel
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure
+      - name: Install
+        run: cmake --install build --config Release --prefix install
+
+  mingw:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DTERMINALTOOL_BUILD_EXAMPLE=ON -DTERMINALTOOL_BUILD_TESTS=ON -DTERMINALTOOL_BUILD_DOCS=OFF
+      - name: Verify generated version
+        run: |
+          grep -q 'Minor = 3' build/generated/terminalTool/Version.h
+          grep -q 'Patch = 0' build/generated/terminalTool/Version.h
+          grep -q 'String = "0.3.0"' build/generated/terminalTool/Version.h
+      - name: Build
+        run: cmake --build build --parallel
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+      - name: Install
+        run: cmake --install build --prefix install
+
+  sanitizers:
+    runs-on: ubuntu-latest
+    env:
+      CC: clang
+      CXX: clang++
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: >-
+          cmake -S . -B build
+          -DTERMINALTOOL_BUILD_EXAMPLE=OFF
+          -DTERMINALTOOL_BUILD_TESTS=ON
+          -DTERMINALTOOL_BUILD_DOCS=OFF
+          -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer"
+          -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+      - name: Build
+        run: cmake --build build --parallel
+      - name: Test
+        env:
+          ASAN_OPTIONS: detect_leaks=1
+        run: ctest --test-dir build --output-on-failure
+
+  doxygen:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Doxygen
+        run: sudo apt-get update && sudo apt-get install -y doxygen
+      - name: Configure
+        run: cmake -S . -B build -DTERMINALTOOL_BUILD_DOCS=ON -DTERMINALTOOL_BUILD_EXAMPLE=OFF -DTERMINALTOOL_BUILD_TESTS=OFF
+      - name: Build documentation
+        run: cmake --build build --target docs

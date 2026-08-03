@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Ataerk YILDIRIM
 
 cmake_minimum_required(VERSION 3.20)
-project(terminalTool VERSION 0.2.2 LANGUAGES CXX)
+project(terminalTool VERSION 0.3.0 LANGUAGES CXX)
 
 message(STATUS "Configuring terminalTool ${PROJECT_VERSION}")
 
@@ -23,16 +23,24 @@ configure_file(
     @ONLY
 )
 
-# terminalTool is deliberately static-only. BUILD_SHARED_LIBS does not alter it.
-add_library(terminalTool STATIC
+set(TERMINALTOOL_SOURCES
     src/Colour.cpp
     src/Console.cpp
     src/DeltaTime.cpp
     src/Input.cpp
     src/TerminalError.cpp
     src/TerminalSession.cpp
+    src/detail/EscapeSequenceParser.cpp
 )
 
+if (WIN32)
+    list(APPEND TERMINALTOOL_SOURCES src/platform/WindowsTerminal.cpp)
+else()
+    list(APPEND TERMINALTOOL_SOURCES src/platform/PosixTerminal.cpp)
+endif()
+
+# terminalTool remains deliberately static-only.
+add_library(terminalTool STATIC ${TERMINALTOOL_SOURCES})
 add_library(terminalTool::terminalTool ALIAS terminalTool)
 
 target_compile_features(terminalTool PUBLIC cxx_std_17)
@@ -46,6 +54,8 @@ target_include_directories(terminalTool
         $<BUILD_INTERFACE:${TERMINALTOOL_GENERATED_INCLUDE_DIR}>
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
 if (MSVC)
@@ -72,30 +82,30 @@ endif()
 if (TERMINALTOOL_BUILD_TESTS)
     add_executable(terminalToolTests tests/terminalToolTests.cpp)
     target_link_libraries(terminalToolTests PRIVATE terminalTool::terminalTool)
+    target_include_directories(terminalToolTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
-    if (MSVC)
-        target_compile_options(terminalToolTests PRIVATE /W4 /permissive- /utf-8)
-    else()
-        target_compile_options(terminalToolTests PRIVATE -Wall -Wextra -Wpedantic)
-    endif()
-
-    add_test(NAME terminalToolTests COMMAND terminalToolTests)
+    add_executable(terminalToolParserTests tests/escapeSequenceParserTests.cpp)
+    target_link_libraries(terminalToolParserTests PRIVATE terminalTool::terminalTool)
+    target_include_directories(terminalToolParserTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
     add_executable(terminalToolPublicHeaderSmoke tests/publicHeaderSmoke.cpp)
     target_link_libraries(terminalToolPublicHeaderSmoke PRIVATE terminalTool::terminalTool)
 
-    if (MSVC)
-        target_compile_options(terminalToolPublicHeaderSmoke PRIVATE /W4 /permissive- /utf-8)
-    else()
-        target_compile_options(terminalToolPublicHeaderSmoke PRIVATE -Wall -Wextra -Wpedantic)
-    endif()
+    foreach(testTarget terminalToolTests terminalToolParserTests terminalToolPublicHeaderSmoke)
+        if (MSVC)
+            target_compile_options(${testTarget} PRIVATE /W4 /permissive- /utf-8)
+        else()
+            target_compile_options(${testTarget} PRIVATE -Wall -Wextra -Wpedantic)
+        endif()
+    endforeach()
 
+    add_test(NAME terminalToolTests COMMAND terminalToolTests)
+    add_test(NAME terminalToolParserTests COMMAND terminalToolParserTests)
     add_test(NAME terminalToolPublicHeaderSmoke COMMAND terminalToolPublicHeaderSmoke)
 endif()
 
 if (TERMINALTOOL_BUILD_DOCS)
     find_package(Doxygen QUIET)
-
     if (Doxygen_FOUND)
         configure_file(docs/Doxyfile.in ${CMAKE_CURRENT_BINARY_DIR}/Doxyfile @ONLY)
         add_custom_target(docs
@@ -126,7 +136,8 @@ install(
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/terminalTool
 )
 
-install(FILES LICENSE NOTICE.md DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/terminalTool)
+install(FILES LICENSE NOTICE.md CHANGELOG.md DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/terminalTool)
+install(DIRECTORY docs/ DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/terminalTool/docs FILES_MATCHING PATTERN "*.md")
 
 write_basic_package_version_file(
     ${CMAKE_CURRENT_BINARY_DIR}/terminalToolConfigVersion.cmake

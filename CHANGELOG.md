@@ -1,79 +1,28 @@
 # Changelog
 
-## 0.2.2 - 2026-08-02
+## 0.3.0
 
-### Added
+- Added a persistent FIFO `tt::InputEvent` queue.
+- Added rich key metadata: repeat state/count, scan code, native key code, and modifiers.
+- Added complete left/right modifier, lock-key, Super, AltGr, and enhanced-key state.
+- Renamed punctuation keys to layout-neutral OEM keys while retaining 0.2.x aliases.
+- Added focus gained/lost events and per-frame focus transition queries.
+- Expanded `tt::TerminalOptions` with cursor, wrapping, focus, clear, signal, and title controls.
+- Added Linux and macOS raw, non-blocking keyboard backends.
+- Added POSIX signal restoration and SIGWINCH observation.
+- Split platform code behind an internal terminal abstraction.
+- Added a shared incremental UTF-8, CSI, and SS3 escape-sequence parser.
+- Added nested clipping regions and `tt::Console::ScopedClip`.
+- Expanded unit tests, parser tests, CI, Doxygen comments, and guides.
 
-- `tt::DeltaTime`, a small steady-clock utility for measuring elapsed time
-  between frame updates.
-- Delta-time access in seconds and milliseconds.
-- Reset support for restarting measurement with a stored delta of zero.
-- Unit tests, public-header coverage, Doxygen documentation, and an updated
-  demonstration for the timing API.
+## 0.2.2
 
-### Changed
+- Added `tt::DeltaTime` based on `std::chrono::steady_clock`.
 
-- Project and generated package version updated to 0.2.2.
-- The demonstration now uses delta time for frame-rate-independent movement.
+## 0.2.1
 
-## 0.2.1 - 2026-08-02
+- Hardened resize allocation, error reporting, restoration, lifecycle ownership, generated versioning, tests, and Windows CI.
 
-### Fixed
+## 0.2.0
 
-- Generated `Version.h` now has include priority over obsolete source-tree
-  copies left behind by in-place upgrades from 0.2.0.
-- Installation explicitly excludes stale source-tree `Version.h` files.
-- Unit tests no longer use `#define private public`, which changed MSVC
-  decorated symbol names and caused unresolved external linker errors.
-
-### Added
-
-- `tt::TerminalOptions` with optional alternate-screen behavior.
-- Restoration of the original Windows console title.
-- Runtime `TerminalErrorCode` values for input flushing, event queries, input
-  reads, terminal output writes, and framebuffer resize allocation.
-- `tt::Console::invalidate()` to force the next complete redraw.
-- Self-contained unit tests and a public-header smoke test.
-- Windows GitHub Actions jobs for MSVC and MinGW UCRT64.
-- A project `.clang-format` configuration.
-
-### Changed
-
-- Framebuffer resize now provides strong exception safety: temporary buffers are
-  allocated before live dimensions or storage are changed.
-- Framebuffer allocation failures are translated into documented
-  `tt::TerminalError` exceptions.
-- Console output failures and Windows input failures are no longer silently
-  ignored.
-- Framebuffer and input lifetime functions are private and owned by
-  `tt::TerminalSession`.
-- Windows implementation details are hidden behind a private implementation;
-  public headers no longer include `windows.h` or export Windows macros.
-- `tt::Version` is generated from the CMake project version.
-- The example now demonstrates alternate-screen configuration and forced redraw.
-
-## 0.2.0 - 2026-08-02
-
-### Added
-
-- Comprehensive Windows console keyboard enumeration and mapping.
-- `tt::TerminalError` and `tt::TerminalErrorCode`.
-- Native operating-system error values on initialization failures.
-- Single-session enforcement through `tt::TerminalSession`.
-- Built-in `tt::Colours` ANSI/VGA-style RGB palette.
-- Cached foreground and background ANSI sequences for each unique RGB colour.
-- `tt::Version` constants.
-- MPL 2.0 `LICENSE`, `NOTICE.md`, and SPDX source notices.
-
-### Changed
-
-- Project version changed to 0.2.0.
-- `Colour::foreground()` and `Colour::background()` return cached references.
-- Frame presentation swaps framebuffers instead of copying the full vectors.
-- The CMake library remains explicitly static regardless of `BUILD_SHARED_LIBS`.
-- Terminal initialization fails loudly with documented exceptions.
-
-## 0.1.0
-
-- Initial namespaced terminal framebuffer, drawing, resize, Windows input, and
-  RAII terminal-session release.
+- Added broad Windows keyboard coverage, `tt::TerminalError`, static-only packaging, framebuffer swapping, cached ANSI colours, and MPL-2.0 licensing.

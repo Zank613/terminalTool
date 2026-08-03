@@ -4,6 +4,7 @@ PROJECT_BRIEF          = "A small C++17 terminal game rendering and input librar
 OUTPUT_DIRECTORY       = "@CMAKE_CURRENT_BINARY_DIR@/documentation"
 INPUT                  = "@CMAKE_CURRENT_SOURCE_DIR@/include" \
                          "@CMAKE_CURRENT_SOURCE_DIR@/README.md" \
+                         "@CMAKE_CURRENT_SOURCE_DIR@/docs" \
                          "@TERMINALTOOL_GENERATED_INCLUDE_DIR@"
 EXAMPLE_PATH           = "@CMAKE_CURRENT_SOURCE_DIR@/examples"
 RECURSIVE              = YES

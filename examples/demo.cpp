@@ -1,7 +1,6 @@
 /**
  * @file demo.cpp
- * @brief Demonstrates the terminalTool public API.
- * @example demo.cpp
+ * @brief Demonstrates terminalTool 0.3.0 input events and clipping.
  *
  * SPDX-License-Identifier: MPL-2.0
  * Copyright (c) 2026 Ataerk YILDIRIM
@@ -9,9 +8,7 @@
 
 #include <algorithm>
 #include <chrono>
-#include <iomanip>
 #include <iostream>
-#include <sstream>
 #include <string>
 #include <thread>
 
@@ -19,57 +16,38 @@
 
 namespace {
 
-void removeLastUtf8Character(std::string& text) {
-    if (text.empty()) {
-        return;
+std::string eventName(const tt::InputEventType type) {
+    switch (type) {
+        case tt::InputEventType::KeyPressed: return "KeyPressed";
+        case tt::InputEventType::KeyReleased: return "KeyReleased";
+        case tt::InputEventType::TextEntered: return "TextEntered";
+        case tt::InputEventType::FocusGained: return "FocusGained";
+        case tt::InputEventType::FocusLost: return "FocusLost";
     }
-
-    std::size_t position = text.size() - 1;
-
-    while (position > 0 && (static_cast<unsigned char>(text[position]) & 0xC0) == 0x80) {
-        position--;
-    }
-
-    text.erase(position);
-}
-
-void removeFirstUtf8Character(std::string& text) {
-    if (text.empty()) {
-        return;
-    }
-
-    std::size_t byteCount = 1;
-
-    while (byteCount < text.size() && (static_cast<unsigned char>(text[byteCount]) & 0xC0) == 0x80) {
-        byteCount++;
-    }
-
-    text.erase(0, byteCount);
+    return "Unknown";
 }
 
 } // namespace
 
 int main() {
     try {
-        const tt::TerminalOptions options {
-            std::string("terminalTool ") + tt::Version::String + " Demo",
-            true
-        };
+        tt::TerminalOptions options;
+        options.title = "terminalTool 0.3.0 demo";
+        options.alternateScreen = true;
+        options.enableFocusEvents = true;
+
         tt::TerminalSession terminal(options);
-
-        constexpr auto frameDuration = std::chrono::milliseconds(16);
-
-        double playerX = 8.0;
-        double playerY = 6.0;
-        constexpr double movementSpeed = 16.0;
-        bool running = true;
-        bool showHelp = true;
-        std::string typedText;
         tt::DeltaTime deltaTime;
+
+        double playerX = 4.0;
+        double playerY = 4.0;
+        std::string typedText;
+        std::string latestEvent = "No event yet";
+        bool running = true;
 
         while (running) {
             const auto frameStart = std::chrono::steady_clock::now();
-            const double frameDeltaSeconds = deltaTime.update();
+            const double seconds = std::min(deltaTime.update(), 0.1);
 
             (void) terminal.update();
             tt::Input::update();
@@ -78,210 +56,67 @@ int main() {
                 running = false;
             }
 
-            if (tt::Input::isPressed(tt::Key::Tab)) {
-                showHelp = !showHelp;
-            }
+            const double speed = 18.0;
+            const auto active = [](const tt::Key key) {
+                return tt::Input::isHeld(key) || tt::Input::isPressed(key);
+            };
 
-            if (tt::Input::isPressed(tt::Key::F5)) {
-                tt::Console::invalidate();
-            }
-
-            if (tt::Input::isPressed(tt::Key::Backspace)) {
-                removeLastUtf8Character(typedText);
-            }
+            if (active(tt::Key::W) || active(tt::Key::Up)) playerY -= speed * seconds;
+            if (active(tt::Key::S) || active(tt::Key::Down)) playerY += speed * seconds;
+            if (active(tt::Key::A) || active(tt::Key::Left)) playerX -= speed * seconds;
+            if (active(tt::Key::D) || active(tt::Key::Right)) playerX += speed * seconds;
 
             typedText += tt::Input::textInput();
-
-            while (typedText.size() > 80) {
-                removeFirstUtf8Character(typedText);
+            if (tt::Input::isPressed(tt::Key::Backspace) && !typedText.empty()) {
+                typedText.pop_back();
             }
 
-            int horizontalMovement = 0;
-            int verticalMovement = 0;
-
-            if (tt::Input::isHeld(tt::Key::A) || tt::Input::isHeld(tt::Key::Left)) {
-                horizontalMovement--;
-            }
-
-            if (tt::Input::isHeld(tt::Key::D) || tt::Input::isHeld(tt::Key::Right)) {
-                horizontalMovement++;
-            }
-
-            if (tt::Input::isHeld(tt::Key::W) || tt::Input::isHeld(tt::Key::Up)) {
-                verticalMovement--;
-            }
-
-            if (tt::Input::isHeld(tt::Key::S) || tt::Input::isHeld(tt::Key::Down)) {
-                verticalMovement++;
+            while (const auto event = tt::Input::pollEvent()) {
+                latestEvent = eventName(event->type);
+                if (event->type == tt::InputEventType::KeyPressed) {
+                    latestEvent += event->key.repeated ? " (repeat)" : "";
+                }
             }
 
             const int width = tt::Console::getFrameWidth();
             const int height = tt::Console::getFrameHeight();
+            playerX = std::clamp(playerX, 2.0, static_cast<double>(std::max(2, width - 3)));
+            playerY = std::clamp(playerY, 3.0, static_cast<double>(std::max(3, height - 6)));
 
-            const tt::Colour screenBackground = tt::Colours::DefaultBackground;
-            const tt::Colour panelBackground(20, 20, 20);
-            const tt::Colour text = tt::Colours::BrightWhite;
-            const tt::Colour muted = tt::Colours::White;
-            const tt::Colour accent = tt::Colours::BrightYellow;
-            const tt::Colour playerColour = tt::Colours::BrightCyan;
-
-            tt::Console::beginFrame(text, screenBackground);
-
-            if (width < 58 || height < 18) {
-                tt::Console::drawTextAligned(
-                    tt::Console::Rect { 0, 1, width, 1 },
-                    "Terminal is too small",
-                    tt::Console::TextAlignment::Centre,
-                    accent,
-                    screenBackground
-                );
-
-                tt::Console::drawTextAligned(
-                    tt::Console::Rect { 0, 3, width, 1 },
-                    "Resize it to at least 58 x 18",
-                    tt::Console::TextAlignment::Centre,
-                    text,
-                    screenBackground
-                );
-
-                tt::Console::endFrame();
-                std::this_thread::sleep_until(frameStart + frameDuration);
-                continue;
-            }
-
-            const int sidebarWidth = showHelp ? 31 : 0;
-            const tt::Console::Rect titleArea { 0, 0, width, 1 };
-            const tt::Console::Rect worldPanel { 1, 2, width - sidebarWidth - 3, height - 4 };
-            const tt::Console::Rect helpPanel { width - sidebarWidth - 1, 2, sidebarWidth, height - 4 };
-
-            // The application chooses whether to clamp unusually large frame deltas.
-            const double movementDeltaSeconds = std::min(frameDeltaSeconds, 0.1);
-            playerX += static_cast<double>(horizontalMovement) * movementSpeed * movementDeltaSeconds;
-            playerY += static_cast<double>(verticalMovement) * movementSpeed * movementDeltaSeconds;
-            playerX = std::clamp(
-                playerX,
-                static_cast<double>(worldPanel.x + 1),
-                static_cast<double>(worldPanel.x + worldPanel.width - 2)
-            );
-            playerY = std::clamp(
-                playerY,
-                static_cast<double>(worldPanel.y + 1),
-                static_cast<double>(worldPanel.y + worldPanel.height - 2)
-            );
-
-            tt::Console::drawTextAligned(
-                titleArea,
-                std::string("TERMINALTOOL ") + tt::Version::String,
-                tt::Console::TextAlignment::Centre,
-                accent,
-                screenBackground
-            );
-
+            tt::Console::beginFrame(tt::Colours::BrightWhite, tt::Colours::DefaultBackground);
             tt::Console::drawPanel(
-                worldPanel,
-                "World",
-                tt::Colour(100, 180, 210),
-                text,
-                panelBackground,
-                tt::Console::BoxStyle::Single
+                { 0, 0, width, height },
+                " terminalTool 0.3.0 ",
+                tt::Colours::BrightCyan,
+                tt::Colours::BrightWhite,
+                tt::Colours::DefaultBackground,
+                tt::Console::BoxStyle::Double
             );
 
-            for (int y = worldPanel.y + 2; y < worldPanel.y + worldPanel.height - 1; y += 4) {
-                tt::Console::drawHorizontalLine(
-                    worldPanel.x + 2,
-                    y,
-                    worldPanel.width - 4,
-                    U'·',
-                    tt::Colour(65, 65, 65),
-                    panelBackground
+            const tt::Console::Rect world { 2, 2, std::max(0, width - 4), std::max(0, height - 7) };
+            {
+                tt::Console::ScopedClip clip(world);
+                tt::Console::fillRect(world, U'.', tt::Colour(50, 70, 70), tt::Colours::DefaultBackground);
+                tt::Console::drawCell(
+                    static_cast<int>(playerX),
+                    static_cast<int>(playerY),
+                    U'@',
+                    tt::Colours::BrightYellow,
+                    tt::Colours::DefaultBackground
                 );
             }
 
-            const int playerCellX = static_cast<int>(playerX);
-            const int playerCellY = static_cast<int>(playerY);
-            tt::Console::drawCell(playerCellX, playerCellY, U'@', playerColour, panelBackground);
-
-            const tt::Console::Rect worldContent {
-                worldPanel.x + 2,
-                worldPanel.y + 1,
-                worldPanel.width - 4,
-                worldPanel.height - 2
-            };
-
-            const std::string positionText =
-                "Position: " + std::to_string(playerCellX) + ", " + std::to_string(playerCellY);
-
-            tt::Console::drawTextClipped(
-                worldContent.x,
-                worldPanel.y + worldPanel.height - 3,
-                positionText,
-                worldContent,
-                muted,
-                panelBackground
-            );
-
-            tt::Console::drawTextClipped(
-                worldContent.x,
-                worldPanel.y + worldPanel.height - 2,
-                "Typed: " + typedText,
-                worldContent,
-                muted,
-                panelBackground
-            );
-
-            if (showHelp) {
-                tt::Console::drawPanel(
-                    helpPanel,
-                    "Controls",
-                    tt::Colour(190, 150, 90),
-                    text,
-                    panelBackground,
-                    tt::Console::BoxStyle::Double
-                );
-
-                const tt::Console::Rect helpContent {
-                    helpPanel.x + 2,
-                    helpPanel.y + 2,
-                    helpPanel.width - 4,
-                    helpPanel.height - 4
-                };
-
-                tt::Console::drawWrappedText(
-                    helpContent,
-                    "WASD or arrows move the @. TAB toggles this panel. F5 forces a full redraw. "
-                    "Type normally to test UTF-8 text events. BACKSPACE edits the sample text. "
-                    "ESC exits safely. Ctrl+C also restores the terminal before Windows closes the program.",
-                    tt::Console::TextAlignment::Left,
-                    text,
-                    panelBackground
-                );
-            }
-
-            const std::string focusText = tt::Input::isFocused() ? "focused" : "not focused";
-            std::ostringstream statusText;
-            statusText
-                << "0.2.2 delta time • "
-                << std::fixed << std::setprecision(2)
-                << deltaTime.milliseconds() << " ms • "
-                << focusText;
-
-            tt::Console::drawTextAligned(
-                tt::Console::Rect { 0, height - 1, width, 1 },
-                statusText.str(),
-                tt::Console::TextAlignment::Centre,
-                muted,
-                screenBackground
-            );
-
+            tt::Console::drawText(2, height - 4, "WASD/arrows move | Escape exits", tt::Colours::BrightGreen);
+            tt::Console::drawText(2, height - 3, "Focus: " + std::string(tt::Input::isFocused() ? "yes" : "no") + " | " + latestEvent);
+            tt::Console::drawTextClipped(2, height - 2, "Typed: " + typedText, { 2, height - 2, std::max(0, width - 4), 1 });
             tt::Console::endFrame();
-            std::this_thread::sleep_until(frameStart + frameDuration);
-        }
 
-        return 0;
+            std::this_thread::sleep_until(frameStart + std::chrono::milliseconds(16));
+        }
     } catch (const tt::TerminalError& error) {
-        std::cerr
-            << "terminalTool error: " << error.what()
-            << " (native error " << error.nativeErrorCode() << ")\n";
+        std::cerr << error.what() << " (native error " << error.nativeErrorCode() << ")\n";
         return 1;
     }
+
+    return 0;
 }

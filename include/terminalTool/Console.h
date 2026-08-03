@@ -67,6 +67,30 @@ public:
         Ascii   ///< Portable `+`, `-`, and `|` border.
     };
 
+    /**
+     * @brief RAII clipping region pushed onto Console's clip stack.
+     *
+     * Constructing the object intersects the requested rectangle with the
+     * current clip. Destruction restores the previous clipping region.
+     */
+    class ScopedClip {
+    private:
+        bool active = false;
+
+    public:
+        /** @brief Pushes a clipping rectangle. */
+        explicit ScopedClip(const Rect& area);
+
+        /** @brief Pops the clipping rectangle when still active. */
+        ~ScopedClip();
+
+        ScopedClip(const ScopedClip&) = delete;
+        ScopedClip& operator=(const ScopedClip&) = delete;
+
+        ScopedClip(ScopedClip&&) = delete;
+        ScopedClip& operator=(ScopedClip&&) = delete;
+    };
+
 private:
     friend class TerminalSession;
     friend class detail::TestAccess;
@@ -95,6 +119,7 @@ private:
     static bool firstFrame;
     static std::vector<Cell> frameBuffer;
     static std::vector<Cell> previousBuffer;
+    static std::vector<Rect> clipStack;
 
     static void initializeFrameBuffer(int width, int height);
     static void resizeFrameBuffer(int width, int height);
@@ -108,6 +133,7 @@ private:
     [[nodiscard]] static std::size_t checkedCellCount(int width, int height, bool resizing);
     [[nodiscard]] static bool isInsideFrame(int x, int y);
     [[nodiscard]] static Rect frameRect();
+    [[nodiscard]] static Rect activeClip();
     [[nodiscard]] static Rect intersect(const Rect& first, const Rect& second);
     [[nodiscard]] static BoxCharacters boxCharacters(BoxStyle style);
     [[nodiscard]] static std::string cursorPosition(int x, int y);
@@ -138,6 +164,23 @@ public:
      * previous frame.
      */
     static void invalidate() noexcept;
+
+    /**
+     * @brief Pushes a clipping rectangle intersected with the current clip.
+     *
+     * All subsequent drawing operations are restricted until popClip() is
+     * called. Prefer ScopedClip when lexical lifetime is available.
+     */
+    static void pushClip(const Rect& area);
+
+    /** @brief Pops the latest clipping rectangle. Empty stacks are ignored. */
+    static void popClip() noexcept;
+
+    /** @brief Removes every user clipping rectangle. */
+    static void clearClips() noexcept;
+
+    /** @return The currently effective clipping rectangle. */
+    [[nodiscard]] static Rect currentClip() noexcept;
 
     /**
      * @brief Clears the current framebuffer with one foreground/background pair.

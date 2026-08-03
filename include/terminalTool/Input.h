@@ -1,6 +1,6 @@
 /**
  * @file Input.h
- * @brief Declares comprehensive keyboard and UTF-8 text input handling.
+ * @brief Declares cross-platform keyboard state, text input, and raw events.
  *
  * SPDX-License-Identifier: MPL-2.0
  * Copyright (c) 2026 Ataerk YILDIRIM
@@ -11,269 +11,361 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
+#include <optional>
 #include <string>
 
 namespace tt {
 
 class TerminalSession;
-namespace detail { class TestAccess; }
+namespace detail {
+class TestAccess;
+struct NativeInputEvent;
+}
 
 /**
- * @brief Keyboard keys recognised by terminalTool's Windows console backend.
+ * @brief Keyboard keys recognised by terminalTool.
  *
- * The enumeration covers the standard alphanumeric keyboard, F1-F24,
- * navigation, numpad, left/right modifiers, punctuation, international and IME
- * keys, browser/media controls, application launch keys, and Windows legacy
- * keyboard virtual keys.
+ * Named OEM entries are deliberately layout-neutral. Use textInput() or
+ * InputEventType::TextEntered when the produced character matters; use Key for
+ * game controls and physical/logical key bindings.
  */
 enum class Key : std::size_t {
-    Cancel, ///< Cancel or Ctrl+Break.
-    Escape, ///< Escape.
-    Backspace, ///< Backspace.
-    Tab, ///< Tab.
-    Clear, ///< Clear.
-    Enter, ///< Main Enter or Return.
-    Pause, ///< Pause.
-    CapsLock, ///< Caps Lock.
+    Unknown,
+    Cancel,
+    Escape,
+    Backspace,
+    Tab,
+    Clear,
+    Enter,
+    Pause,
+    CapsLock,
 
-    KanaHangul, ///< Kana or Hangul mode key.
-    Junja, ///< Junja mode key.
-    Final, ///< Final mode key.
-    HanjaKanji, ///< Hanja or Kanji mode key.
-    ImeOn, ///< IME On.
-    ImeOff, ///< IME Off.
-    Convert, ///< IME Convert.
-    NonConvert, ///< IME NonConvert.
-    Accept, ///< IME Accept.
-    ModeChange, ///< IME mode change.
+    KanaHangul,
+    Junja,
+    Final,
+    HanjaKanji,
+    ImeOn,
+    ImeOff,
+    Convert,
+    NonConvert,
+    Accept,
+    ModeChange,
 
-    Space, ///< Space bar.
-    PageUp, ///< Page Up.
-    PageDown, ///< Page Down.
-    End, ///< End.
-    Home, ///< Home.
-    Left, ///< Left arrow.
-    Up, ///< Up arrow.
-    Right, ///< Right arrow.
-    Down, ///< Down arrow.
-    Select, ///< Select.
-    Print, ///< Print.
-    Execute, ///< Execute.
-    PrintScreen, ///< Print Screen.
-    Insert, ///< Insert.
-    Delete, ///< Delete.
-    Help, ///< Help.
+    Space,
+    PageUp,
+    PageDown,
+    End,
+    Home,
+    Left,
+    Up,
+    Right,
+    Down,
+    Select,
+    Print,
+    Execute,
+    PrintScreen,
+    Insert,
+    Delete,
+    Help,
 
-    Zero, ///< Number-row 0.
-    One, ///< Number-row 1.
-    Two, ///< Number-row 2.
-    Three, ///< Number-row 3.
-    Four, ///< Number-row 4.
-    Five, ///< Number-row 5.
-    Six, ///< Number-row 6.
-    Seven, ///< Number-row 7.
-    Eight, ///< Number-row 8.
-    Nine, ///< Number-row 9.
+    Zero,
+    One,
+    Two,
+    Three,
+    Four,
+    Five,
+    Six,
+    Seven,
+    Eight,
+    Nine,
 
-    A, ///< A.
-    B, ///< B.
-    C, ///< C.
-    D, ///< D.
-    E, ///< E.
-    F, ///< F.
-    G, ///< G.
-    H, ///< H.
-    I, ///< I.
-    J, ///< J.
-    K, ///< K.
-    L, ///< L.
-    M, ///< M.
-    N, ///< N.
-    O, ///< O.
-    P, ///< P.
-    Q, ///< Q.
-    R, ///< R.
-    S, ///< S.
-    T, ///< T.
-    U, ///< U.
-    V, ///< V.
-    W, ///< W.
-    X, ///< X.
-    Y, ///< Y.
-    Z, ///< Z.
+    A,
+    B,
+    C,
+    D,
+    E,
+    F,
+    G,
+    H,
+    I,
+    J,
+    K,
+    L,
+    M,
+    N,
+    O,
+    P,
+    Q,
+    R,
+    S,
+    T,
+    U,
+    V,
+    W,
+    X,
+    Y,
+    Z,
 
-    LeftWindows, ///< Left Windows or Command key.
-    RightWindows, ///< Right Windows or Command key.
-    Menu, ///< Application menu key.
-    Sleep, ///< System sleep key.
+    LeftSuper,
+    RightSuper,
+    Menu,
+    Sleep,
 
-    Numpad0, ///< Numpad 0.
-    Numpad1, ///< Numpad 1.
-    Numpad2, ///< Numpad 2.
-    Numpad3, ///< Numpad 3.
-    Numpad4, ///< Numpad 4.
-    Numpad5, ///< Numpad 5.
-    Numpad6, ///< Numpad 6.
-    Numpad7, ///< Numpad 7.
-    Numpad8, ///< Numpad 8.
-    Numpad9, ///< Numpad 9.
-    NumpadMultiply, ///< Numpad multiply.
-    NumpadAdd, ///< Numpad add.
-    NumpadSeparator, ///< Numpad separator.
-    NumpadSubtract, ///< Numpad subtract.
-    NumpadDecimal, ///< Numpad decimal.
-    NumpadDivide, ///< Numpad divide.
-    NumpadEnter, ///< Numpad Enter.
-    NumpadEqual, ///< Numpad equal on supported keyboards.
+    Numpad0,
+    Numpad1,
+    Numpad2,
+    Numpad3,
+    Numpad4,
+    Numpad5,
+    Numpad6,
+    Numpad7,
+    Numpad8,
+    Numpad9,
+    NumpadMultiply,
+    NumpadAdd,
+    NumpadSeparator,
+    NumpadSubtract,
+    NumpadDecimal,
+    NumpadDivide,
+    NumpadEnter,
+    NumpadEqual,
 
-    F1, ///< Function key F1.
-    F2, ///< Function key F2.
-    F3, ///< Function key F3.
-    F4, ///< Function key F4.
-    F5, ///< Function key F5.
-    F6, ///< Function key F6.
-    F7, ///< Function key F7.
-    F8, ///< Function key F8.
-    F9, ///< Function key F9.
-    F10, ///< Function key F10.
-    F11, ///< Function key F11.
-    F12, ///< Function key F12.
-    F13, ///< Function key F13.
-    F14, ///< Function key F14.
-    F15, ///< Function key F15.
-    F16, ///< Function key F16.
-    F17, ///< Function key F17.
-    F18, ///< Function key F18.
-    F19, ///< Function key F19.
-    F20, ///< Function key F20.
-    F21, ///< Function key F21.
-    F22, ///< Function key F22.
-    F23, ///< Function key F23.
-    F24, ///< Function key F24.
+    F1,
+    F2,
+    F3,
+    F4,
+    F5,
+    F6,
+    F7,
+    F8,
+    F9,
+    F10,
+    F11,
+    F12,
+    F13,
+    F14,
+    F15,
+    F16,
+    F17,
+    F18,
+    F19,
+    F20,
+    F21,
+    F22,
+    F23,
+    F24,
 
-    NumLock, ///< Num Lock.
-    ScrollLock, ///< Scroll Lock.
-    LeftShift, ///< Left Shift.
-    RightShift, ///< Right Shift.
-    LeftControl, ///< Left Control.
-    RightControl, ///< Right Control.
-    LeftAlt, ///< Left Alt.
-    RightAlt, ///< Right Alt or AltGr.
+    NumLock,
+    ScrollLock,
+    LeftShift,
+    RightShift,
+    LeftControl,
+    RightControl,
+    LeftAlt,
+    RightAlt,
 
-    Semicolon, ///< Semicolon or colon key.
-    Equal, ///< Equal or plus key.
-    Comma, ///< Comma or less-than key.
-    Minus, ///< Minus or underscore key.
-    Period, ///< Period or greater-than key.
-    Slash, ///< Slash or question-mark key.
-    Grave, ///< Grave accent or tilde key.
-    LeftBracket, ///< Left bracket or brace key.
-    Backslash, ///< Backslash or pipe key.
-    RightBracket, ///< Right bracket or brace key.
-    Apostrophe, ///< Apostrophe or quotation-mark key.
-    NonUsBackslash, ///< Non-US backslash key.
-    Oem8, ///< OEM-specific keyboard key.
-    OemClear, ///< OEM Clear key.
+    Oem1,
+    OemPlus,
+    OemComma,
+    OemMinus,
+    OemPeriod,
+    Oem2,
+    Oem3,
+    Oem4,
+    Oem5,
+    Oem6,
+    Oem7,
+    Oem8,
+    Oem102,
+    OemClear,
 
-    BrowserBack, ///< Browser Back.
-    BrowserForward, ///< Browser Forward.
-    BrowserRefresh, ///< Browser Refresh.
-    BrowserStop, ///< Browser Stop.
-    BrowserSearch, ///< Browser Search.
-    BrowserFavourites, ///< Browser Favourites.
-    BrowserHome, ///< Browser Home.
+    BrowserBack,
+    BrowserForward,
+    BrowserRefresh,
+    BrowserStop,
+    BrowserSearch,
+    BrowserFavourites,
+    BrowserHome,
 
-    VolumeMute, ///< Mute volume.
-    VolumeDown, ///< Lower volume.
-    VolumeUp, ///< Raise volume.
-    MediaNextTrack, ///< Next media track.
-    MediaPreviousTrack, ///< Previous media track.
-    MediaStop, ///< Stop media playback.
-    MediaPlayPause, ///< Play or pause media.
-    LaunchMail, ///< Launch mail application.
-    LaunchMediaSelect, ///< Launch media selector.
-    LaunchApp1, ///< Launch application 1.
-    LaunchApp2, ///< Launch application 2.
+    VolumeMute,
+    VolumeDown,
+    VolumeUp,
+    MediaNextTrack,
+    MediaPreviousTrack,
+    MediaStop,
+    MediaPlayPause,
+    LaunchMail,
+    LaunchMediaSelect,
+    LaunchApp1,
+    LaunchApp2,
 
-    Process, ///< IME Process key.
-    Packet, ///< Unicode packet input key.
-    Attn, ///< Attention key.
-    CrSel, ///< Cursor Select key.
-    ExSel, ///< Extend Selection key.
-    EraseEof, ///< Erase End Of File key.
-    Play, ///< Play key.
-    Zoom, ///< Zoom key.
-    NoName, ///< Reserved NoName key.
-    Pa1, ///< PA1 key.
+    Process,
+    Packet,
+    Attn,
+    CrSel,
+    ExSel,
+    EraseEof,
+    Play,
+    Zoom,
+    NoName,
+    Pa1,
 
-    Count ///< Sentinel used internally; not a usable key.
+    Count,
+
+    // Compatibility aliases retained from terminalTool 0.2.x.
+    LeftWindows = LeftSuper,
+    RightWindows = RightSuper,
+    Semicolon = Oem1,
+    Equal = OemPlus,
+    Comma = OemComma,
+    Minus = OemMinus,
+    Period = OemPeriod,
+    Slash = Oem2,
+    Grave = Oem3,
+    LeftBracket = Oem4,
+    Backslash = Oem5,
+    RightBracket = Oem6,
+    Apostrophe = Oem7,
+    NonUsBackslash = Oem102
 };
 
 /**
- * @brief Static per-frame keyboard and UTF-8 text input API.
+ * @brief Modifier and lock-key state attached to a key event.
  *
- * On Windows, input is read from console events rather than global keyboard
- * polling. Call update() exactly once near the start of each frame.
+ * POSIX terminals normally report aggregate Shift, Control, Alt, and Super
+ * information rather than left/right physical sides. In that case terminalTool
+ * places the aggregate state in the corresponding left-side field and leaves
+ * the right-side field false.
+ */
+struct ModifierState {
+    bool leftShift = false;
+    bool rightShift = false;
+    bool leftControl = false;
+    bool rightControl = false;
+    bool leftAlt = false;
+    bool rightAlt = false;
+    bool leftSuper = false;
+    bool rightSuper = false;
+    bool capsLock = false;
+    bool numLock = false;
+    bool scrollLock = false;
+    bool enhanced = false;
+
+    /** @return Whether either Shift key is active. */
+    [[nodiscard]] bool shift() const noexcept;
+    /** @return Whether either Control key is active. */
+    [[nodiscard]] bool control() const noexcept;
+    /** @return Whether either Alt key is active. */
+    [[nodiscard]] bool alt() const noexcept;
+    /** @return Whether either Super/Windows/Command key is active. */
+    [[nodiscard]] bool super() const noexcept;
+    /** @return Whether Right Alt is active, commonly representing AltGr. */
+    [[nodiscard]] bool altGr() const noexcept;
+};
+
+/** @brief Kinds of raw input events produced by Input::pollEvent(). */
+enum class InputEventType {
+    KeyPressed,   ///< A key-down event, including native repeat events.
+    KeyReleased,  ///< A key-up event or a synthetic POSIX pulse release.
+    TextEntered,  ///< One decoded Unicode code point was entered.
+    FocusGained,  ///< The terminal reported input focus gained.
+    FocusLost     ///< The terminal reported input focus lost.
+};
+
+/** @brief Complete native and portable metadata for a keyboard event. */
+struct KeyEventData {
+    Key key = Key::Unknown;              ///< Portable terminalTool key.
+    bool repeated = false;               ///< Whether this is a repeat key-down.
+    std::uint16_t repeatCount = 1;        ///< Native repeat count when available.
+    std::uint16_t scanCode = 0;           ///< Native scan code, or zero on POSIX.
+    std::uint32_t nativeKeyCode = 0;      ///< Native virtual key/code/sequence value.
+    ModifierState modifiers {};           ///< Modifier state at event time.
+};
+
+/**
+ * @brief One raw event retained in terminalTool's FIFO input queue.
+ *
+ * For KeyPressed and KeyReleased, inspect key. For TextEntered, inspect
+ * character. Focus events carry no additional payload.
+ */
+struct InputEvent {
+    InputEventType type = InputEventType::KeyPressed;
+    KeyEventData key {};
+    char32_t character = U'\0';
+};
+
+/**
+ * @brief Static per-frame keyboard, UTF-8 text, focus, and raw-event API.
+ *
+ * Call update() once near the start of each frame. Per-frame state is replaced
+ * on every update, while unconsumed raw events remain in the FIFO queue until
+ * pollEvent() or clearEvents() removes them.
  */
 class Input {
 private:
     friend class TerminalSession;
     friend class detail::TestAccess;
+
     static constexpr std::size_t KEY_COUNT = static_cast<std::size_t>(Key::Count);
 
     static std::array<bool, KEY_COUNT> current;
     static std::array<bool, KEY_COUNT> pressed;
     static std::array<bool, KEY_COUNT> released;
     static std::string text;
-    static char16_t pendingHighSurrogate;
+    static std::deque<InputEvent> eventQueue;
     static bool focused;
+    static bool gainedFocus;
+    static bool lostFocus;
 
     [[nodiscard]] static std::size_t index(Key key) noexcept;
-    [[nodiscard]] static Key keyFromVirtualCode(std::uint16_t virtualCode, std::uint16_t scanCode, std::uint32_t controlState);
-    static void setKeyState(Key key, bool isDown);
-    static void releaseAllKeys();
-    static void appendTextCodeUnit(char16_t codeUnit, std::uint16_t repeatCount);
-    static void appendUtf8(char32_t character);
-
-    /** @brief Resets input state and clears pending Windows console events. */
     static void initialize();
-
-    /** @brief Clears all held, pressed, released, focus, and text state. */
     static void reset() noexcept;
+    static void processNativeEvent(const detail::NativeInputEvent& event);
+    static void setKeyState(KeyEventData key, bool isDown);
+    static void releaseAllKeys(const ModifierState& modifiers = {});
+    static void appendUtf8(char32_t character);
 
 public:
     /**
-     * @brief Reads available input events and refreshes per-frame states.
-     * @throws TerminalError when the console input handle or event stream fails.
+     * @brief Reads all currently available platform input and updates state.
+     * @throws TerminalError when the platform input stream fails.
      */
     static void update();
 
-    /**
-     * @param key Key to test.
-     * @return `true` while the key remains down. `Key::Count` returns `false`.
-     */
+    /** @return Whether key is currently held. */
     [[nodiscard]] static bool isHeld(Key key) noexcept;
-
-    /**
-     * @param key Key to test.
-     * @return `true` only during the frame in which the key goes down.
-     */
+    /** @return Whether key transitioned down during the latest update(). */
     [[nodiscard]] static bool isPressed(Key key) noexcept;
-
-    /**
-     * @param key Key to test.
-     * @return `true` only during the frame in which the key goes up.
-     */
+    /** @return Whether key transitioned up during the latest update(). */
     [[nodiscard]] static bool isReleased(Key key) noexcept;
 
-    /** @return `true` when the console currently has input focus. */
+    /** @return Whether the terminal currently reports input focus. */
     [[nodiscard]] static bool isFocused() noexcept;
+    /** @return Whether focus was gained during the latest update(). */
+    [[nodiscard]] static bool focusGained() noexcept;
+    /** @return Whether focus was lost during the latest update(). */
+    [[nodiscard]] static bool focusLost() noexcept;
 
     /**
-     * @brief Returns printable UTF-8 text received by the latest update().
-     * @return Reference valid until the next update() or reset().
+     * @return UTF-8 text entered during the latest update().
+     * @note This value is cleared at the start of the next update().
      */
     [[nodiscard]] static const std::string& textInput() noexcept;
+
+    /** @return Number of unconsumed raw input events. */
+    [[nodiscard]] static std::size_t eventCount() noexcept;
+    /** @return Whether at least one raw event is waiting. */
+    [[nodiscard]] static bool hasEvent() noexcept;
+
+    /**
+     * @brief Removes and returns the oldest raw input event.
+     * @return Empty optional when the queue is empty.
+     */
+    [[nodiscard]] static std::optional<InputEvent> pollEvent();
+
+    /** @brief Discards all queued raw events without changing key state. */
+    static void clearEvents() noexcept;
 };
 
 } // namespace tt
