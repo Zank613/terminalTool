@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: MPL-2.0
+# Copyright (c) 2026 Ataerk YILDIRIM
+
+set(_header "@TERMINALTOOL_GENERATED_INCLUDE_DIR@/terminalTool/Version.h")
+if(NOT EXISTS "${_header}")
+    message(FATAL_ERROR "Generated terminalTool Version.h is missing: ${_header}")
+endif()
+
+file(READ "${_header}" _contents)
+foreach(_expected
+    "#define TERMINALTOOL_VERSION_MAJOR @PROJECT_VERSION_MAJOR@"
+    "#define TERMINALTOOL_VERSION_MINOR @PROJECT_VERSION_MINOR@"
+    "#define TERMINALTOOL_VERSION_PATCH @PROJECT_VERSION_PATCH@"
+    "#define TERMINALTOOL_VERSION_STRING \"@PROJECT_VERSION@\""
+)
+    string(FIND "${_contents}" "${_expected}" _position)
+    if(_position EQUAL -1)
+        message(FATAL_ERROR
+            "Generated Version.h does not match CMake project version @PROJECT_VERSION@. "
+            "Missing line: ${_expected}"
+        )
+    endif()
+endforeach()
+
+message(STATUS "Verified generated terminalTool version @PROJECT_VERSION@")
