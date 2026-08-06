@@ -1,6 +1,6 @@
 /**
  * @file demo.cpp
- * @brief Demonstrates terminalTool 0.3.0 input events and clipping.
+ * @brief Demonstrates terminalTool input events and clipping.
  *
  * SPDX-License-Identifier: MPL-2.0
  * Copyright (c) 2026 Ataerk YILDIRIM
@@ -32,7 +32,7 @@ std::string eventName(const tt::InputEventType type) {
 int main() {
     try {
         tt::TerminalOptions options;
-        options.title = "terminalTool 0.3.0 demo";
+        options.title = std::string("terminalTool ") + tt::Version::String + " demo";
         options.alternateScreen = true;
         options.enableFocusEvents = true;
 
@@ -86,7 +86,7 @@ int main() {
             tt::Console::beginFrame(tt::Colours::BrightWhite, tt::Colours::DefaultBackground);
             tt::Console::drawPanel(
                 { 0, 0, width, height },
-                " terminalTool 0.3.0 ",
+                std::string(" terminalTool ") + tt::Version::String + " ",
                 tt::Colours::BrightCyan,
                 tt::Colours::BrightWhite,
                 tt::Colours::DefaultBackground,

@@ -9,6 +9,7 @@
 #include "platform/PlatformTerminal.h"
 
 #include "terminalTool/TerminalError.h"
+#include "detail/Utf16.h"
 
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -19,6 +20,7 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <string>
@@ -35,7 +37,15 @@ struct WindowsState {
     UINT originalOutputCodePage = 0;
     UINT originalInputCodePage = 0;
     std::wstring originalTitle;
-    char16_t pendingHighSurrogate = 0;
+    tt::detail::Utf16RepeatState utf16State {};
+    bool leftShiftHeld = false;
+    bool rightShiftHeld = false;
+    bool leftControlHeld = false;
+    bool rightControlHeld = false;
+    bool leftAltHeld = false;
+    bool rightAltHeld = false;
+    bool leftSuperHeld = false;
+    bool rightSuperHeld = false;
     bool outputModeSaved = false;
     bool inputModeSaved = false;
     bool outputCodePageChanged = false;
@@ -48,6 +58,9 @@ struct WindowsState {
 
 WindowsState state;
 std::atomic<WindowsState*> activeState { nullptr };
+std::atomic_flag restorationStarted = ATOMIC_FLAG_INIT;
+std::array<INPUT_RECORD, 128> inputRecords {};
+std::vector<char32_t> decodedScalars;
 
 [[noreturn]] void throwWindows(const tt::TerminalErrorCode code, const char* message) {
     throw tt::TerminalError(code, message, static_cast<std::uint32_t>(GetLastError()));
@@ -128,6 +141,10 @@ void writeBestEffort(const std::string& sequence) noexcept {
 }
 
 void restoreState() noexcept {
+    if (restorationStarted.test_and_set()) {
+        return;
+    }
+
     if (state.initialized) {
         writeBestEffort(shutdownSequence(state.options));
     } else {
@@ -176,16 +193,30 @@ void removeHandler() noexcept {
     activeState.store(nullptr);
 }
 
+void updateTrackedModifier(const tt::Key key, const bool isDown) noexcept {
+    switch (key) {
+        case tt::Key::LeftShift: state.leftShiftHeld = isDown; break;
+        case tt::Key::RightShift: state.rightShiftHeld = isDown; break;
+        case tt::Key::LeftControl: state.leftControlHeld = isDown; break;
+        case tt::Key::RightControl: state.rightControlHeld = isDown; break;
+        case tt::Key::LeftAlt: state.leftAltHeld = isDown; break;
+        case tt::Key::RightAlt: state.rightAltHeld = isDown; break;
+        case tt::Key::LeftSuper: state.leftSuperHeld = isDown; break;
+        case tt::Key::RightSuper: state.rightSuperHeld = isDown; break;
+        default: break;
+    }
+}
+
 tt::ModifierState modifiersFromControlState(const DWORD controlState) {
     tt::ModifierState modifiers;
-    modifiers.leftShift = (GetKeyState(VK_LSHIFT) & 0x8000) != 0;
-    modifiers.rightShift = (GetKeyState(VK_RSHIFT) & 0x8000) != 0;
-    modifiers.leftControl = (controlState & LEFT_CTRL_PRESSED) != 0;
-    modifiers.rightControl = (controlState & RIGHT_CTRL_PRESSED) != 0;
-    modifiers.leftAlt = (controlState & LEFT_ALT_PRESSED) != 0;
-    modifiers.rightAlt = (controlState & RIGHT_ALT_PRESSED) != 0;
-    modifiers.leftSuper = (GetKeyState(VK_LWIN) & 0x8000) != 0;
-    modifiers.rightSuper = (GetKeyState(VK_RWIN) & 0x8000) != 0;
+    modifiers.leftShift = state.leftShiftHeld;
+    modifiers.rightShift = state.rightShiftHeld;
+    modifiers.leftControl = state.leftControlHeld || (controlState & LEFT_CTRL_PRESSED) != 0;
+    modifiers.rightControl = state.rightControlHeld || (controlState & RIGHT_CTRL_PRESSED) != 0;
+    modifiers.leftAlt = state.leftAltHeld || (controlState & LEFT_ALT_PRESSED) != 0;
+    modifiers.rightAlt = state.rightAltHeld || (controlState & RIGHT_ALT_PRESSED) != 0;
+    modifiers.leftSuper = state.leftSuperHeld;
+    modifiers.rightSuper = state.rightSuperHeld;
     modifiers.capsLock = (controlState & CAPSLOCK_ON) != 0;
     modifiers.numLock = (controlState & NUMLOCK_ON) != 0;
     modifiers.scrollLock = (controlState & SCROLLLOCK_ON) != 0;
@@ -339,29 +370,10 @@ void appendTextCodeUnit(
     const tt::ModifierState& modifiers,
     std::vector<tt::detail::NativeInputEvent>& events
 ) {
-    for (std::uint16_t repeat = 0; repeat < repeatCount; repeat++) {
-        if (codeUnit >= 0xD800 && codeUnit <= 0xDBFF) {
-            state.pendingHighSurrogate = codeUnit;
-            continue;
-        }
+    decodedScalars.clear();
+    tt::detail::decodeRepeatedUtf16(state.utf16State, codeUnit, repeatCount, decodedScalars);
 
-        char32_t character = codeUnit;
-        if (codeUnit >= 0xDC00 && codeUnit <= 0xDFFF && state.pendingHighSurrogate != 0) {
-            character = 0x10000 +
-                ((static_cast<char32_t>(state.pendingHighSurrogate) - 0xD800) << 10) +
-                (static_cast<char32_t>(codeUnit) - 0xDC00);
-            state.pendingHighSurrogate = 0;
-        } else if (codeUnit >= 0xDC00 && codeUnit <= 0xDFFF) {
-            character = 0xFFFD;
-        } else if (state.pendingHighSurrogate != 0) {
-            tt::detail::NativeInputEvent replacement;
-            replacement.type = tt::detail::NativeInputEventType::Text;
-            replacement.character = 0xFFFD;
-            replacement.modifiers = modifiers;
-            events.push_back(replacement);
-            state.pendingHighSurrogate = 0;
-        }
-
+    for (const char32_t character : decodedScalars) {
         tt::detail::NativeInputEvent text;
         text.type = tt::detail::NativeInputEventType::Text;
         text.character = character;
@@ -376,7 +388,10 @@ void appendTextCodeUnit(
 namespace tt::detail {
 
 void platformInitialize(const TerminalOptions& options) {
+    restorationStarted.clear();
     state = WindowsState {};
+    decodedScalars.clear();
+    decodedScalars.reserve(128);
     state.options = options;
     state.outputHandle = GetStdHandle(STD_OUTPUT_HANDLE);
     if (state.outputHandle == INVALID_HANDLE_VALUE || state.outputHandle == nullptr) {
@@ -482,6 +497,14 @@ void platformShutdown() noexcept {
     state = WindowsState {};
 }
 
+bool platformIsInitialized() noexcept {
+    return state.initialized;
+}
+
+PlatformUpdateResult platformUpdate() {
+    return PlatformUpdateResult { true, false };
+}
+
 TerminalDimensions platformTerminalSize() {
     CONSOLE_SCREEN_BUFFER_INFO information {};
     if (!GetConsoleScreenBufferInfo(state.outputHandle, &information)) {
@@ -515,7 +538,7 @@ void platformFlushInput() {
     if (!FlushConsoleInputBuffer(state.inputHandle)) {
         throwWindows(TerminalErrorCode::FlushInputFailed, "terminalTool could not flush pending Windows input.");
     }
-    state.pendingHighSurrogate = 0;
+    tt::detail::resetRepeatedUtf16(state.utf16State);
 }
 
 void platformReadInput(std::vector<NativeInputEvent>& events) {
@@ -525,21 +548,21 @@ void platformReadInput(std::vector<NativeInputEvent>& events) {
     }
 
     while (available > 0) {
-        const DWORD requested = std::min<DWORD>(available, 128);
-        std::vector<INPUT_RECORD> records(requested);
+        const DWORD requested = std::min<DWORD>(available, static_cast<DWORD>(inputRecords.size()));
         DWORD read = 0;
-        if (!ReadConsoleInputW(state.inputHandle, records.data(), requested, &read)) {
+        if (!ReadConsoleInputW(state.inputHandle, inputRecords.data(), requested, &read)) {
             throwWindows(TerminalErrorCode::ReadInputFailed, "terminalTool could not read Windows console input.");
         }
 
         for (DWORD index = 0; index < read; index++) {
-            const INPUT_RECORD& record = records[index];
+            const INPUT_RECORD& record = inputRecords[index];
 
             if (record.EventType == KEY_EVENT) {
                 const KEY_EVENT_RECORD& native = record.Event.KeyEvent;
                 NativeInputEvent event;
                 event.type = native.bKeyDown ? NativeInputEventType::KeyDown : NativeInputEventType::KeyUp;
                 event.key = keyFromVirtualCode(native.wVirtualKeyCode, native.wVirtualScanCode, native.dwControlKeyState);
+                updateTrackedModifier(event.key, native.bKeyDown != FALSE);
                 event.repeated = native.bKeyDown && native.wRepeatCount > 1;
                 event.repeatCount = std::max<std::uint16_t>(1, native.wRepeatCount);
                 event.scanCode = native.wVirtualScanCode;
@@ -562,7 +585,7 @@ void platformReadInput(std::vector<NativeInputEvent>& events) {
                     : NativeInputEventType::FocusLost;
                 events.push_back(event);
                 if (!record.Event.FocusEvent.bSetFocus) {
-                    state.pendingHighSurrogate = 0;
+                    tt::detail::resetRepeatedUtf16(state.utf16State);
                 }
             }
         }

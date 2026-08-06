@@ -21,8 +21,16 @@ struct TerminalDimensions {
     int height = 0;
 };
 
+/** @brief Pending platform work processed once by TerminalSession::update(). */
+struct PlatformUpdateResult {
+    bool checkResize = true;
+    bool invalidateFrame = false;
+};
+
 void platformInitialize(const TerminalOptions& options);
 void platformShutdown() noexcept;
+[[nodiscard]] bool platformIsInitialized() noexcept;
+[[nodiscard]] PlatformUpdateResult platformUpdate();
 [[nodiscard]] TerminalDimensions platformTerminalSize();
 void platformWriteOutput(const std::string& output);
 void platformFlushInput();

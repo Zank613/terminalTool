@@ -13,18 +13,22 @@
 #include <string>
 #include <vector>
 
-#include "NativeInputEvent.h"
+#include "detail/NativeInputEvent.h"
 
 namespace tt::detail {
 
 /**
  * @brief Incrementally decodes UTF-8, control bytes, CSI, and SS3 sequences.
  *
- * The parser accepts arbitrarily split reads. A lone Escape byte is delayed
- * briefly so it can still become the prefix of a later sequence.
+ * Reads may be split at any byte boundary. A lone Escape byte is delayed
+ * briefly so it can become a later CSI, SS3, or Alt-modified sequence.
+ * Malformed or overlong escape sequences are bounded and recovered instead of
+ * remaining buffered forever.
  */
 class EscapeSequenceParser {
 private:
+    static constexpr std::size_t MAX_ESCAPE_SEQUENCE_LENGTH = 128;
+
     std::string buffer;
     std::chrono::steady_clock::time_point escapePendingSince {};
     bool escapePending = false;
@@ -32,6 +36,11 @@ private:
     void parseAvailable(std::vector<NativeInputEvent>& events, bool forceEscape);
 
 public:
+    /** @brief Maximum accepted bytes in one pending escape sequence. */
+    [[nodiscard]] static constexpr std::size_t maximumEscapeSequenceLength() noexcept {
+        return MAX_ESCAPE_SEQUENCE_LENGTH;
+    }
+
     /** @brief Adds bytes and emits every complete event currently available. */
     void feed(const char* bytes, std::size_t size, std::vector<NativeInputEvent>& events);
 
@@ -41,11 +50,14 @@ public:
     /** @brief Emits a pending lone Escape once its ambiguity timeout expires. */
     void flushExpired(std::vector<NativeInputEvent>& events);
 
-    /** @brief Forces all pending input, including a lone Escape, to be emitted. */
+    /** @brief Forces all pending input, including malformed partial input, out. */
     void flush(std::vector<NativeInputEvent>& events);
 
     /** @brief Clears all pending partial input. */
     void reset() noexcept;
+
+    /** @return Number of currently buffered undecoded bytes. */
+    [[nodiscard]] std::size_t bufferedByteCount() const noexcept { return buffer.size(); }
 };
 
 } // namespace tt::detail

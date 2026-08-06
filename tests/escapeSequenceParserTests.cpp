@@ -89,6 +89,59 @@ void testControlKey() {
     TT_CHECK(events[0].modifiers.control());
 }
 
+
+void testShiftedDigitsAndControlCombinations() {
+    tt::detail::EscapeSequenceParser parser;
+    std::vector<tt::detail::NativeInputEvent> events;
+    parser.feed("!@)", events);
+
+    TT_CHECK(events.size() == 9);
+    TT_CHECK(events[0].key == tt::Key::One);
+    TT_CHECK(events[0].modifiers.shift());
+    TT_CHECK(events[3].key == tt::Key::Two);
+    TT_CHECK(events[6].key == tt::Key::Zero);
+
+    events.clear();
+    std::string controls;
+    controls.push_back(static_cast<char>(0x00));
+    controls.push_back(static_cast<char>(0x1C));
+    controls.push_back(static_cast<char>(0x1D));
+    controls.push_back(static_cast<char>(0x1E));
+    controls.push_back(static_cast<char>(0x1F));
+    parser.feed(controls, events);
+    TT_CHECK(events.size() == 10);
+    TT_CHECK(events[0].key == tt::Key::Space);
+    TT_CHECK(events[2].key == tt::Key::Oem5);
+    TT_CHECK(events[4].key == tt::Key::Oem6);
+    TT_CHECK(events[6].key == tt::Key::Six);
+    TT_CHECK(events[8].key == tt::Key::OemMinus);
+}
+
+void testMalformedRecoveryAndUtf8() {
+    tt::detail::EscapeSequenceParser parser;
+    std::vector<tt::detail::NativeInputEvent> events;
+
+    std::string overlong = "\x1b[";
+    overlong.append(tt::detail::EscapeSequenceParser::maximumEscapeSequenceLength() + 8, '1');
+    parser.feed(overlong, events);
+    TT_CHECK(!events.empty());
+    TT_CHECK(events[0].key == tt::Key::Escape);
+    TT_CHECK(parser.bufferedByteCount() < tt::detail::EscapeSequenceParser::maximumEscapeSequenceLength());
+
+    events.clear();
+    parser.reset();
+    parser.feed(std::string("\xF0\x28\x8C\x28", 4), events);
+    TT_CHECK(events.size() >= 3);
+    TT_CHECK(events[2].type == tt::detail::NativeInputEventType::Text);
+    TT_CHECK(events[2].character == U'\uFFFD');
+
+    events.clear();
+    parser.reset();
+    parser.feed("\x1b[1;999999999999999999999999A", events);
+    TT_CHECK(events.size() == 2);
+    TT_CHECK(events[0].key == tt::Key::Up);
+}
+
 } // namespace
 
 int main() {
@@ -97,6 +150,8 @@ int main() {
     testFocusAndPartialSequences();
     testAltAndEscape();
     testControlKey();
+    testShiftedDigitsAndControlCombinations();
+    testMalformedRecoveryAndUtf8();
 
     if (failures != 0) {
         std::cerr << failures << " parser test(s) failed.\n";

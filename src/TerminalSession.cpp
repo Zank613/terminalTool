@@ -56,7 +56,7 @@ TerminalSession::TerminalSession(const TerminalOptions& options) {
 
         const detail::TerminalDimensions size = detail::platformTerminalSize();
         Console::initializeFrameBuffer(size.width, size.height);
-        Input::initialize();
+        Input::initialize(options.maximumQueuedInputEvents);
         implementation->active = true;
     } catch (...) {
         Input::reset();
@@ -83,6 +83,18 @@ TerminalSession::~TerminalSession() {
 
 bool TerminalSession::update() {
     if (!isActive()) {
+        throw TerminalError(
+            TerminalErrorCode::NoActiveSession,
+            "tt::TerminalSession::update() requires an active session."
+        );
+    }
+
+    const detail::PlatformUpdateResult platformResult = detail::platformUpdate();
+    if (platformResult.invalidateFrame) {
+        Console::invalidate();
+    }
+
+    if (!platformResult.checkResize) {
         return false;
     }
     return Console::resizeToTerminal();

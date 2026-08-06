@@ -1,30 +1,22 @@
-# Clipping regions
+# Clipping and safe coordinates
 
-Clipping limits every Console drawing operation to the intersection of the
-framebuffer and the current clip.
-
-## RAII clipping
+Every draw operation is restricted to the framebuffer and the current nested
+clip. `ScopedClip` is the recommended interface:
 
 ```cpp
 {
-    tt::Console::ScopedClip clip({ 4, 3, 40, 12 });
-    drawWorld();
+    tt::Console::ScopedClip clip({ 2, 2, 40, 12 });
+    drawContents();
 }
 ```
 
-The previous clip is restored automatically. Nested `ScopedClip` objects
-intersect with their parents.
+Rectangle intersection and containment use widened arithmetic, preventing
+signed overflow for extreme integer coordinates. Horizontal and vertical line
+operations intersect with the visible frame before looping, so a huge
+completely off-screen line does not perform billions of iterations.
 
-## Manual clipping
+Control scalars are never emitted from framebuffer cells. They are replaced by
+U+FFFD before storage.
 
-```cpp
-tt::Console::pushClip(panelArea);
-drawPanelContents();
-tt::Console::popClip();
-```
-
-`popClip()` is safe on an empty stack. `clearClips()` removes all user regions,
-and `currentClip()` returns the effective rectangle.
-
-Framebuffer initialization and resizing clear the clip stack so stale regions
-cannot survive a terminal dimension change.
+`popClip()` asserts on an empty stack in debug builds. Release builds retain the
+safe no-op behavior.

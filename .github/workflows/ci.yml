@@ -6,64 +6,111 @@ on:
 
 jobs:
   unix:
-    name: ${{ matrix.name }}
+    name: ${{ matrix.name }} ${{ matrix.build_type }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - name: Ubuntu GCC
             os: ubuntu-latest
-            compiler: g++
+            cxx: g++
             cc: gcc
+            build_type: Debug
+          - name: Ubuntu GCC
+            os: ubuntu-latest
+            cxx: g++
+            cc: gcc
+            build_type: Release
           - name: Ubuntu Clang
             os: ubuntu-latest
-            compiler: clang++
+            cxx: clang++
             cc: clang
+            build_type: Debug
+          - name: Ubuntu Clang
+            os: ubuntu-latest
+            cxx: clang++
+            cc: clang
+            build_type: Release
           - name: macOS AppleClang
             os: macos-latest
-            compiler: clang++
+            cxx: clang++
             cc: clang
+            build_type: Debug
+          - name: macOS AppleClang
+            os: macos-latest
+            cxx: clang++
+            cc: clang
+            build_type: Release
     runs-on: ${{ matrix.os }}
     env:
       CC: ${{ matrix.cc }}
-      CXX: ${{ matrix.compiler }}
+      CXX: ${{ matrix.cxx }}
     steps:
       - uses: actions/checkout@v4
+      - name: Confirm version header is build-generated
+        run: test ! -e include/terminalTool/Version.h
       - name: Configure
-        run: cmake -S . -B build -DTERMINALTOOL_BUILD_EXAMPLE=ON -DTERMINALTOOL_BUILD_TESTS=ON -DTERMINALTOOL_BUILD_DOCS=OFF
+        run: >-
+          cmake -S . -B build
+          -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
+          -DTERMINALTOOL_BUILD_EXAMPLE=ON
+          -DTERMINALTOOL_BUILD_TESTS=ON
+          -DTERMINALTOOL_BUILD_DOCS=OFF
       - name: Verify generated version
-        run: |
-          grep -q 'Minor = 3' build/generated/terminalTool/Version.h
-          grep -q 'Patch = 0' build/generated/terminalTool/Version.h
-          grep -q 'String = "0.3.0"' build/generated/terminalTool/Version.h
+        run: cmake --build build --target terminalToolVersionCheck
       - name: Build
         run: cmake --build build --parallel
       - name: Test
         run: ctest --test-dir build --output-on-failure
       - name: Install
         run: cmake --install build --prefix install
+      - name: Consume installed package
+        run: >-
+          cmake -S tests/consumer/find -B consumer-find
+          -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
+          -DCMAKE_PREFIX_PATH=${{ github.workspace }}/install
+      - name: Build installed-package consumer
+        run: cmake --build consumer-find --parallel
+      - name: Consume as subdirectory
+        run: >-
+          cmake -S tests/consumer/subdirectory -B consumer-subdirectory
+          -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
+          -DTERMINALTOOL_SOURCE_DIR=${{ github.workspace }} -DBUILD_TESTING=OFF
+      - name: Build subdirectory consumer
+        run: cmake --build consumer-subdirectory --parallel
 
   msvc:
+    name: Windows MSVC
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Confirm version header is build-generated
+        shell: pwsh
+        run: |
+          if (Test-Path include/terminalTool/Version.h) {
+            throw "Source-tree Version.h must not exist; CMake generates it."
+          }
       - name: Configure
         run: cmake -S . -B build -DTERMINALTOOL_BUILD_EXAMPLE=ON -DTERMINALTOOL_BUILD_TESTS=ON -DTERMINALTOOL_BUILD_DOCS=OFF
       - name: Verify generated version
-        shell: pwsh
-        run: |
-          $header = Get-Content build/generated/terminalTool/Version.h -Raw
-          if ($header -notmatch 'Minor = 3' -or $header -notmatch 'Patch = 0' -or $header -notmatch 'String = "0.3.0"') {
-            throw "Generated Version.h does not contain terminalTool 0.3.0"
-          }
+        run: cmake --build build --target terminalToolVersionCheck --config Release
       - name: Build
         run: cmake --build build --config Release --parallel
       - name: Test
         run: ctest --test-dir build -C Release --output-on-failure
       - name: Install
         run: cmake --install build --config Release --prefix install
+      - name: Configure installed-package consumer
+        run: cmake -S tests/consumer/find -B consumer-find -DCMAKE_PREFIX_PATH=${{ github.workspace }}/install
+      - name: Build installed-package consumer
+        run: cmake --build consumer-find --config Release --parallel
+      - name: Configure subdirectory consumer
+        run: cmake -S tests/consumer/subdirectory -B consumer-subdirectory -DTERMINALTOOL_SOURCE_DIR=${{ github.workspace }} -DBUILD_TESTING=OFF
+      - name: Build subdirectory consumer
+        run: cmake --build consumer-subdirectory --config Release --parallel
 
   mingw:
+    name: Windows MinGW UCRT64
     runs-on: windows-latest
     defaults:
       run:
@@ -78,21 +125,29 @@ jobs:
             mingw-w64-ucrt-x86_64-gcc
             mingw-w64-ucrt-x86_64-cmake
             mingw-w64-ucrt-x86_64-ninja
+      - name: Confirm version header is build-generated
+        run: test ! -e include/terminalTool/Version.h
       - name: Configure
-        run: cmake -S . -B build -G Ninja -DTERMINALTOOL_BUILD_EXAMPLE=ON -DTERMINALTOOL_BUILD_TESTS=ON -DTERMINALTOOL_BUILD_DOCS=OFF
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DTERMINALTOOL_BUILD_EXAMPLE=ON -DTERMINALTOOL_BUILD_TESTS=ON -DTERMINALTOOL_BUILD_DOCS=OFF
       - name: Verify generated version
-        run: |
-          grep -q 'Minor = 3' build/generated/terminalTool/Version.h
-          grep -q 'Patch = 0' build/generated/terminalTool/Version.h
-          grep -q 'String = "0.3.0"' build/generated/terminalTool/Version.h
+        run: cmake --build build --target terminalToolVersionCheck
       - name: Build
         run: cmake --build build --parallel
       - name: Test
         run: ctest --test-dir build --output-on-failure
       - name: Install
         run: cmake --install build --prefix install
+      - name: Configure installed-package consumer
+        run: cmake -S tests/consumer/find -B consumer-find -G Ninja -DCMAKE_PREFIX_PATH="$PWD/install"
+      - name: Build installed-package consumer
+        run: cmake --build consumer-find --parallel
+      - name: Configure subdirectory consumer
+        run: cmake -S tests/consumer/subdirectory -B consumer-subdirectory -G Ninja -DTERMINALTOOL_SOURCE_DIR="$PWD" -DBUILD_TESTING=OFF
+      - name: Build subdirectory consumer
+        run: cmake --build consumer-subdirectory --parallel
 
   sanitizers:
+    name: Address and undefined behaviour sanitizers
     runs-on: ubuntu-latest
     env:
       CC: clang
@@ -115,6 +170,7 @@ jobs:
         run: ctest --test-dir build --output-on-failure
 
   doxygen:
+    name: Doxygen
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -123,4 +179,4 @@ jobs:
       - name: Configure
         run: cmake -S . -B build -DTERMINALTOOL_BUILD_DOCS=ON -DTERMINALTOOL_BUILD_EXAMPLE=OFF -DTERMINALTOOL_BUILD_TESTS=OFF
       - name: Build documentation
-        run: cmake --build build --target docs
+        run: cmake --build build --target terminalToolDocs

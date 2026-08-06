@@ -1,6 +1,6 @@
 /**
  * @file Input.cpp
- * @brief Implements cross-platform input state and the raw event queue.
+ * @brief Implements cross-platform input state and the bounded raw event queue.
  *
  * SPDX-License-Identifier: MPL-2.0
  * Copyright (c) 2026 Ataerk YILDIRIM
@@ -9,10 +9,19 @@
 #include "terminalTool/Input.h"
 
 #include "detail/NativeInputEvent.h"
+#include "detail/Unicode.h"
 #include "platform/PlatformTerminal.h"
+#include "terminalTool/TerminalError.h"
+#include "terminalTool/TerminalSession.h"
 
 #include <utility>
 #include <vector>
+
+namespace {
+
+std::vector<tt::detail::NativeInputEvent> nativeEventBuffer;
+
+} // namespace
 
 namespace tt {
 
@@ -21,6 +30,9 @@ std::array<bool, Input::KEY_COUNT> Input::pressed {};
 std::array<bool, Input::KEY_COUNT> Input::released {};
 std::string Input::text;
 std::deque<InputEvent> Input::eventQueue;
+std::size_t Input::maximumEventQueueSize = 4096;
+std::size_t Input::droppedEvents = 0;
+bool Input::queueOverflowed = false;
 bool Input::focused = true;
 bool Input::gainedFocus = false;
 bool Input::lostFocus = false;
@@ -49,8 +61,10 @@ std::size_t Input::index(const Key key) noexcept {
     return static_cast<std::size_t>(key);
 }
 
-void Input::initialize() {
+void Input::initialize(const std::size_t maximumQueuedEvents) {
     reset();
+    maximumEventQueueSize = maximumQueuedEvents;
+    nativeEventBuffer.reserve(128);
     detail::platformFlushInput();
 }
 
@@ -60,22 +74,32 @@ void Input::reset() noexcept {
     released.fill(false);
     text.clear();
     eventQueue.clear();
+    droppedEvents = 0;
+    queueOverflowed = false;
     focused = true;
     gainedFocus = false;
     lostFocus = false;
+    nativeEventBuffer.clear();
 }
 
 void Input::update() {
+    if (!TerminalSession::hasActiveSession() || !detail::platformIsInitialized()) {
+        throw TerminalError(
+            TerminalErrorCode::NoActiveSession,
+            "tt::Input::update() requires an active TerminalSession."
+        );
+    }
+
     pressed.fill(false);
     released.fill(false);
     text.clear();
     gainedFocus = false;
     lostFocus = false;
 
-    std::vector<detail::NativeInputEvent> nativeEvents;
-    detail::platformReadInput(nativeEvents);
+    nativeEventBuffer.clear();
+    detail::platformReadInput(nativeEventBuffer);
 
-    for (const detail::NativeInputEvent& event : nativeEvents) {
+    for (const detail::NativeInputEvent& event : nativeEventBuffer) {
         processNativeEvent(event);
     }
 }
@@ -110,10 +134,12 @@ void Input::processNativeEvent(const detail::NativeInputEvent& event) {
             appendUtf8(event.character);
             InputEvent publicEvent;
             publicEvent.type = InputEventType::TextEntered;
-            publicEvent.character = event.character;
+            publicEvent.character = detail::isValidUnicodeScalar(event.character)
+                ? event.character
+                : U'\uFFFD';
             publicEvent.key.nativeKeyCode = event.nativeKeyCode;
             publicEvent.key.modifiers = event.modifiers;
-            eventQueue.push_back(publicEvent);
+            enqueue(std::move(publicEvent));
             break;
         }
 
@@ -122,7 +148,7 @@ void Input::processNativeEvent(const detail::NativeInputEvent& event) {
             gainedFocus = true;
             InputEvent publicEvent;
             publicEvent.type = InputEventType::FocusGained;
-            eventQueue.push_back(publicEvent);
+            enqueue(std::move(publicEvent));
             break;
         }
 
@@ -132,7 +158,7 @@ void Input::processNativeEvent(const detail::NativeInputEvent& event) {
             releaseAllKeys(event.modifiers);
             InputEvent publicEvent;
             publicEvent.type = InputEventType::FocusLost;
-            eventQueue.push_back(publicEvent);
+            enqueue(std::move(publicEvent));
             break;
         }
     }
@@ -155,7 +181,7 @@ void Input::setKeyState(KeyEventData key, const bool isDown) {
         InputEvent event;
         event.type = InputEventType::KeyPressed;
         event.key = key;
-        eventQueue.push_back(event);
+        enqueue(std::move(event));
         return;
     }
 
@@ -169,7 +195,7 @@ void Input::setKeyState(KeyEventData key, const bool isDown) {
     InputEvent event;
     event.type = InputEventType::KeyReleased;
     event.key = key;
-    eventQueue.push_back(event);
+    enqueue(std::move(event));
 }
 
 void Input::releaseAllKeys(const ModifierState& modifiers) {
@@ -185,27 +211,30 @@ void Input::releaseAllKeys(const ModifierState& modifiers) {
         event.type = InputEventType::KeyReleased;
         event.key.key = static_cast<Key>(keyIndex);
         event.key.modifiers = modifiers;
-        eventQueue.push_back(event);
+        enqueue(std::move(event));
     }
 }
 
 void Input::appendUtf8(const char32_t character) {
-    if (character <= 0x7F) {
-        text.push_back(static_cast<char>(character));
-    } else if (character <= 0x7FF) {
-        text.push_back(static_cast<char>(0xC0 | ((character >> 6) & 0x1F)));
-        text.push_back(static_cast<char>(0x80 | (character & 0x3F)));
-    } else if (character <= 0xFFFF) {
-        text.push_back(static_cast<char>(0xE0 | ((character >> 12) & 0x0F)));
-        text.push_back(static_cast<char>(0x80 | ((character >> 6) & 0x3F)));
-        text.push_back(static_cast<char>(0x80 | (character & 0x3F)));
-    } else if (character <= 0x10FFFF) {
-        text.push_back(static_cast<char>(0xF0 | ((character >> 18) & 0x07)));
-        text.push_back(static_cast<char>(0x80 | ((character >> 12) & 0x3F)));
-        text.push_back(static_cast<char>(0x80 | ((character >> 6) & 0x3F)));
-        text.push_back(static_cast<char>(0x80 | (character & 0x3F)));
-    } else {
-        appendUtf8(0xFFFD);
+    text += detail::encodeUtf8(character);
+}
+
+void Input::enqueue(InputEvent event) noexcept {
+    if (maximumEventQueueSize == 0) {
+        return;
+    }
+
+    if (eventQueue.size() >= maximumEventQueueSize) {
+        eventQueue.pop_front();
+        droppedEvents++;
+        queueOverflowed = true;
+    }
+
+    try {
+        eventQueue.push_back(std::move(event));
+    } catch (...) {
+        droppedEvents++;
+        queueOverflowed = true;
     }
 }
 
@@ -260,6 +289,19 @@ std::optional<InputEvent> Input::pollEvent() {
 
 void Input::clearEvents() noexcept {
     eventQueue.clear();
+}
+
+std::size_t Input::droppedEventCount() noexcept {
+    return droppedEvents;
+}
+
+bool Input::eventOverflowed() noexcept {
+    return queueOverflowed;
+}
+
+void Input::clearEventOverflow() noexcept {
+    droppedEvents = 0;
+    queueOverflowed = false;
 }
 
 } // namespace tt

@@ -4,30 +4,42 @@
 |---|---:|---:|---:|
 | ANSI framebuffer rendering | Yes | Yes | Yes |
 | True-colour output | Yes | Terminal-dependent | Terminal-dependent |
-| Real key-down and key-up events | Yes | No, pulse model | No, pulse model |
-| Raw input event queue | Yes | Yes | Yes |
-| Native repeat count | Yes | Not generally available | Not generally available |
-| Native scan code | Yes | Not generally available | Not generally available |
-| Focus reporting | Console events | CSI I/O when supported | CSI I/O when supported |
+| Real key-down and key-up events | Yes | Pulse model | Pulse model |
+| Bounded raw input event queue | Yes | Yes | Yes |
+| Native repeat count and scan code | Yes | Usually unavailable | Usually unavailable |
+| Focus reporting | Console records | CSI I/O when supported | CSI I/O when supported |
 | Alternate screen | Yes | Yes | Yes |
-| Emergency restoration | Console control handler | POSIX signals | POSIX signals |
+| Ctrl+C/termination restoration | Control handler | POSIX signals | POSIX signals |
+| Suspend/resume restoration | N/A | SIGTSTP/SIGCONT | SIGTSTP/SIGCONT |
+| Resize notification | Polled console size | SIGWINCH | SIGWINCH |
 
-## Windows backend
+## Windows
 
-The Windows backend uses `ReadConsoleInputW`, preserves and restores console
-modes and UTF-8 code pages, restores the previous title when requested, and
-maps Windows virtual keys to layout-neutral terminalTool keys.
+The backend uses `ReadConsoleInputW`. Modifier state is tracked in event order
+instead of consulting global asynchronous key state. Left/right modifiers,
+lock state, enhanced-key state, repeat counts, scan codes, and native virtual
+keys are retained.
 
-## POSIX backend
+UTF-16 high-surrogate repeat counts are paired with repeated low surrogates so
+supplementary characters do not produce spurious U+FFFD events. Emergency
+restoration is guarded so normal destruction and a control handler cannot both
+restore the console concurrently.
 
-Linux and macOS share one `termios` backend. Input is raw and non-blocking. The
-incremental parser handles UTF-8, ASCII controls, CSI navigation/function-key
-sequences, SS3 sequences, xterm modifier parameters, Alt-prefixed text, and
-focus events.
+## POSIX
 
-SIGINT, SIGTERM, SIGHUP, and SIGQUIT receive best-effort terminal restoration
-before default signal handling resumes. SIGWINCH is recorded for terminal size
-changes; applications continue calling `TerminalSession::update()` explicitly.
+Linux and macOS share raw non-blocking `termios` input and one strict UTF-8,
+CSI, and SS3 parser.
 
-Terminal protocols vary. Unknown escape sequences are safely ignored rather
-than guessed into unrelated keys.
+`SIGWINCH` controls when terminal size is queried. If signal handlers are
+explicitly disabled, size polling occurs every `TerminalSession::update()`.
+
+Before `SIGTSTP`, terminal attributes, cursor, wrapping, focus reporting, and
+the alternate screen are restored. After `SIGCONT`, raw state and configured
+terminal modes are reapplied, the framebuffer is invalidated, and size is
+rechecked. Existing signal actions are restored and dispatched rather than
+silently replaced. If an existing termination handler returns, terminalTool
+reapplies its runtime state on the next `TerminalSession::update()`.
+
+POSIX title text is sanitized before being placed in an OSC title sequence.
+The previous POSIX title cannot be queried reliably and therefore cannot be
+restored exactly.

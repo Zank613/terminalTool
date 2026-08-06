@@ -143,7 +143,8 @@ private:
 public:
     /**
      * @return The current visible terminal size.
-     * @throws TerminalError when the terminal dimensions cannot be queried.
+     * @throws TerminalError with NoActiveSession when no session exists, or
+     *         QueryTerminalSizeFailed when dimensions cannot be queried.
      */
     [[nodiscard]] static Size terminalSize();
 
@@ -173,7 +174,10 @@ public:
      */
     static void pushClip(const Rect& area);
 
-    /** @brief Pops the latest clipping rectangle. Empty stacks are ignored. */
+    /**
+     * @brief Pops the latest clipping rectangle.
+     * @note An empty stack is ignored in release builds and asserted in debug builds.
+     */
     static void popClip() noexcept;
 
     /** @brief Removes every user clipping rectangle. */
@@ -193,7 +197,8 @@ public:
      * @brief Draws one Unicode code point into a framebuffer cell.
      * @param x Horizontal cell coordinate.
      * @param y Vertical cell coordinate.
-     * @param character Unicode code point to draw.
+     * @param character Unicode scalar to draw. Terminal control characters are
+     *        replaced with U+FFFD so they cannot inject terminal commands.
      * @param foreground Foreground colour.
      * @param background Background colour.
      */
@@ -258,8 +263,8 @@ public:
 
     /**
      * @brief Presents the current framebuffer to the terminal.
-     * @throws TerminalError with TerminalErrorCode::WriteOutputFailed when the
-     *         rendered frame cannot be written or flushed.
+     * @throws TerminalError with NoActiveSession when no session exists, or
+     *         WriteOutputFailed when the frame cannot be written.
      */
     static void endFrame();
 };

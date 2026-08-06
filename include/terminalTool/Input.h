@@ -314,17 +314,21 @@ private:
     static std::array<bool, KEY_COUNT> released;
     static std::string text;
     static std::deque<InputEvent> eventQueue;
+    static std::size_t maximumEventQueueSize;
+    static std::size_t droppedEvents;
+    static bool queueOverflowed;
     static bool focused;
     static bool gainedFocus;
     static bool lostFocus;
 
     [[nodiscard]] static std::size_t index(Key key) noexcept;
-    static void initialize();
+    static void initialize(std::size_t maximumQueuedEvents);
     static void reset() noexcept;
     static void processNativeEvent(const detail::NativeInputEvent& event);
     static void setKeyState(KeyEventData key, bool isDown);
     static void releaseAllKeys(const ModifierState& modifiers = {});
     static void appendUtf8(char32_t character);
+    static void enqueue(InputEvent event) noexcept;
 
 public:
     /**
@@ -366,6 +370,15 @@ public:
 
     /** @brief Discards all queued raw events without changing key state. */
     static void clearEvents() noexcept;
+
+    /** @return Number of events discarded because the queue was full. */
+    [[nodiscard]] static std::size_t droppedEventCount() noexcept;
+
+    /** @return Whether at least one event has overflowed since the flag was cleared. */
+    [[nodiscard]] static bool eventOverflowed() noexcept;
+
+    /** @brief Clears the overflow flag and discarded-event counter. */
+    static void clearEventOverflow() noexcept;
 };
 
 } // namespace tt

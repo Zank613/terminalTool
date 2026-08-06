@@ -8,12 +8,16 @@
 
 #include "detail/EscapeSequenceParser.h"
 
+#include "detail/Unicode.h"
+
 #include <algorithm>
-#include <array>
-#include <cctype>
+#include <charconv>
+#include <chrono>
 #include <cstdint>
-#include <cstdlib>
+#include <limits>
 #include <string>
+#include <string_view>
+#include <system_error>
 #include <vector>
 
 namespace {
@@ -43,7 +47,11 @@ void appendKeyPulse(
     events.push_back(up);
 }
 
-void appendText(std::vector<NativeInputEvent>& events, const char32_t character, const ModifierState& modifiers = {}) {
+void appendText(
+    std::vector<NativeInputEvent>& events,
+    const char32_t character,
+    const ModifierState& modifiers = {}
+) {
     NativeInputEvent event;
     event.type = NativeInputEventType::Text;
     event.character = character;
@@ -62,16 +70,33 @@ ModifierState modifiersFromParameter(const int parameter) {
     return modifiers;
 }
 
-std::vector<int> parseParameters(const std::string& text) {
-    std::vector<int> parameters;
-    std::size_t start = 0;
+int parseParameter(const std::string_view token) noexcept {
+    if (token.empty()) {
+        return 0;
+    }
 
+    int value = 0;
+    const auto result = std::from_chars(token.data(), token.data() + token.size(), value);
+    if (result.ec != std::errc {} || result.ptr != token.data() + token.size() || value < 0) {
+        return 0;
+    }
+    return value;
+}
+
+std::vector<int> parseParameters(std::string_view text) {
+    std::vector<int> parameters;
+
+    if (!text.empty() && (text.front() == '?' || text.front() == '>' || text.front() == '<')) {
+        text.remove_prefix(1);
+    }
+
+    std::size_t start = 0;
     while (start <= text.size()) {
         const std::size_t end = text.find(';', start);
-        const std::string token = text.substr(start, end == std::string::npos ? std::string::npos : end - start);
-        parameters.push_back(token.empty() ? 0 : std::atoi(token.c_str()));
+        const std::size_t length = end == std::string_view::npos ? text.size() - start : end - start;
+        parameters.push_back(parseParameter(text.substr(start, length)));
 
-        if (end == std::string::npos) {
+        if (end == std::string_view::npos) {
             break;
         }
         start = end + 1;
@@ -80,7 +105,23 @@ std::vector<int> parseParameters(const std::string& text) {
     return parameters;
 }
 
-Key keyFromAscii(const char32_t character) {
+Key shiftedDigitKey(const char32_t character) noexcept {
+    switch (character) {
+        case U')': return Key::Zero;
+        case U'!': return Key::One;
+        case U'@': return Key::Two;
+        case U'#': return Key::Three;
+        case U'$': return Key::Four;
+        case U'%': return Key::Five;
+        case U'^': return Key::Six;
+        case U'&': return Key::Seven;
+        case U'*': return Key::Eight;
+        case U'(': return Key::Nine;
+        default: return Key::Unknown;
+    }
+}
+
+Key keyFromAscii(const char32_t character) noexcept {
     if (character >= U'a' && character <= U'z') {
         return static_cast<Key>(static_cast<std::size_t>(Key::A) + static_cast<std::size_t>(character - U'a'));
     }
@@ -89,6 +130,11 @@ Key keyFromAscii(const char32_t character) {
     }
     if (character >= U'0' && character <= U'9') {
         return static_cast<Key>(static_cast<std::size_t>(Key::Zero) + static_cast<std::size_t>(character - U'0'));
+    }
+
+    const Key shiftedDigit = shiftedDigitKey(character);
+    if (shiftedDigit != Key::Unknown) {
+        return shiftedDigit;
     }
 
     switch (character) {
@@ -108,71 +154,14 @@ Key keyFromAscii(const char32_t character) {
     }
 }
 
-bool isShiftedAscii(const char32_t character) {
+bool isShiftedAscii(const char32_t character) noexcept {
     return
         (character >= U'A' && character <= U'Z') ||
-        character == U'!' || character == U'@' || character == U'#' || character == U'$' ||
-        character == U'%' || character == U'^' || character == U'&' || character == U'*' ||
-        character == U'(' || character == U')' || character == U'_' || character == U'+' ||
-        character == U'{' || character == U'}' || character == U'|' || character == U':' ||
-        character == U'"' || character == U'<' || character == U'>' || character == U'?' ||
-        character == U'~';
-}
-
-bool decodeUtf8At(const std::string& bytes, const std::size_t offset, char32_t& character, std::size_t& length) {
-    if (offset >= bytes.size()) {
-        return false;
-    }
-
-    const auto first = static_cast<unsigned char>(bytes[offset]);
-    if (first < 0x80) {
-        character = first;
-        length = 1;
-        return true;
-    }
-
-    if ((first & 0xE0) == 0xC0) {
-        length = 2;
-        character = first & 0x1F;
-    } else if ((first & 0xF0) == 0xE0) {
-        length = 3;
-        character = first & 0x0F;
-    } else if ((first & 0xF8) == 0xF0) {
-        length = 4;
-        character = first & 0x07;
-    } else {
-        character = 0xFFFD;
-        length = 1;
-        return true;
-    }
-
-    if (offset + length > bytes.size()) {
-        return false;
-    }
-
-    for (std::size_t index = 1; index < length; index++) {
-        const auto continuation = static_cast<unsigned char>(bytes[offset + index]);
-        if ((continuation & 0xC0) != 0x80) {
-            character = 0xFFFD;
-            length = 1;
-            return true;
-        }
-        character = (character << 6) | (continuation & 0x3F);
-    }
-
-    const bool overlong =
-        (length == 2 && character < 0x80) ||
-        (length == 3 && character < 0x800) ||
-        (length == 4 && character < 0x10000);
-    const bool invalidScalar =
-        character > 0x10FFFF ||
-        (character >= 0xD800 && character <= 0xDFFF);
-
-    if (overlong || invalidScalar) {
-        character = 0xFFFD;
-    }
-
-    return true;
+        shiftedDigitKey(character) != Key::Unknown ||
+        character == U'_' || character == U'+' || character == U'{' ||
+        character == U'}' || character == U'|' || character == U':' ||
+        character == U'"' || character == U'<' || character == U'>' ||
+        character == U'?' || character == U'~';
 }
 
 void appendCharacterPulse(
@@ -187,7 +176,7 @@ void appendCharacterPulse(
     appendText(events, character, modifiers);
 }
 
-Key keyFromTildeCode(const int code) {
+Key keyFromTildeCode(const int code) noexcept {
     switch (code) {
         case 1: case 7: return Key::Home;
         case 2: return Key::Insert;
@@ -219,7 +208,7 @@ Key keyFromTildeCode(const int code) {
     }
 }
 
-Key keyFromFinal(const char finalByte) {
+Key keyFromFinal(const char finalByte) noexcept {
     switch (finalByte) {
         case 'A': return Key::Up;
         case 'B': return Key::Down;
@@ -235,13 +224,13 @@ Key keyFromFinal(const char finalByte) {
     }
 }
 
-void parseCsi(const std::string& sequence, std::vector<NativeInputEvent>& events) {
+void parseCsi(const std::string_view sequence, std::vector<NativeInputEvent>& events) {
     if (sequence.size() < 3) {
         return;
     }
 
     const char finalByte = sequence.back();
-    const std::string body = sequence.substr(2, sequence.size() - 3);
+    const std::string_view body = sequence.substr(2, sequence.size() - 3);
 
     if (body.empty() && finalByte == 'I') {
         NativeInputEvent event;
@@ -260,25 +249,58 @@ void parseCsi(const std::string& sequence, std::vector<NativeInputEvent>& events
     const int modifierParameter = parameters.size() >= 2 ? parameters[1] : 1;
     const ModifierState modifiers = modifiersFromParameter(modifierParameter);
 
-    Key key = Key::Unknown;
-    if (finalByte == '~') {
-        key = keyFromTildeCode(parameters.empty() ? 0 : parameters[0]);
-    } else {
-        key = keyFromFinal(finalByte);
-    }
+    const Key key = finalByte == '~'
+        ? keyFromTildeCode(parameters.empty() ? 0 : parameters[0])
+        : keyFromFinal(finalByte);
 
     if (key != Key::Unknown) {
         appendKeyPulse(events, key, modifiers, static_cast<std::uint32_t>(finalByte));
     }
 }
 
-void parseSs3(const std::string& sequence, std::vector<NativeInputEvent>& events) {
+void parseSs3(const std::string_view sequence, std::vector<NativeInputEvent>& events) {
     if (sequence.size() != 3) {
         return;
     }
     const Key key = keyFromFinal(sequence[2]);
     if (key != Key::Unknown) {
         appendKeyPulse(events, key, {}, static_cast<std::uint32_t>(sequence[2]));
+    }
+}
+
+bool appendControlPulse(const unsigned char byte, std::vector<NativeInputEvent>& events) {
+    ModifierState modifiers;
+    modifiers.leftControl = true;
+
+    if (byte == 0x00) {
+        appendKeyPulse(events, Key::Space, modifiers, byte);
+        return true;
+    }
+    if (byte >= 0x01 && byte <= 0x1A) {
+        const Key key = static_cast<Key>(
+            static_cast<std::size_t>(Key::A) + static_cast<std::size_t>(byte - 1)
+        );
+        appendKeyPulse(events, key, modifiers, byte);
+        return true;
+    }
+
+    switch (byte) {
+        case 0x1C:
+            appendKeyPulse(events, Key::Oem5, modifiers, byte); // Ctrl+Backslash
+            return true;
+        case 0x1D:
+            appendKeyPulse(events, Key::Oem6, modifiers, byte); // Ctrl+RightBracket
+            return true;
+        case 0x1E:
+            modifiers.leftShift = true;
+            appendKeyPulse(events, Key::Six, modifiers, byte); // Ctrl+^
+            return true;
+        case 0x1F:
+            modifiers.leftShift = true;
+            appendKeyPulse(events, Key::OemMinus, modifiers, byte); // Ctrl+_
+            return true;
+        default:
+            return false;
     }
 }
 
@@ -303,10 +325,7 @@ void EscapeSequenceParser::feed(const std::string& bytes, std::vector<NativeInpu
 }
 
 void EscapeSequenceParser::flushExpired(std::vector<NativeInputEvent>& events) {
-    if (
-        escapePending &&
-        std::chrono::steady_clock::now() - escapePendingSince >= ESCAPE_DELAY
-    ) {
+    if (escapePending && std::chrono::steady_clock::now() - escapePendingSince >= ESCAPE_DELAY) {
         parseAvailable(events, true);
     }
 }
@@ -315,14 +334,12 @@ void EscapeSequenceParser::flush(std::vector<NativeInputEvent>& events) {
     parseAvailable(events, true);
 
     while (!buffer.empty()) {
-        char32_t character = 0;
-        std::size_t length = 0;
-        if (!decodeUtf8At(buffer, 0, character, length)) {
-            character = 0xFFFD;
-            length = 1;
+        Utf8DecodeResult decoded = decodeNextUtf8(buffer, 0);
+        if (!decoded.complete) {
+            decoded = Utf8DecodeResult { U'\uFFFD', 1, true };
         }
-        appendCharacterPulse(events, character);
-        buffer.erase(0, length);
+        appendCharacterPulse(events, decoded.character);
+        buffer.erase(0, decoded.length);
     }
 
     escapePending = false;
@@ -366,38 +383,55 @@ void EscapeSequenceParser::parseAvailable(
                 while (
                     finalPosition < buffer.size() &&
                     (static_cast<unsigned char>(buffer[finalPosition]) < 0x40 ||
-                     static_cast<unsigned char>(buffer[finalPosition]) > 0x7E)
+                     static_cast<unsigned char>(buffer[finalPosition]) > 0x7E) &&
+                    finalPosition - consumed < MAX_ESCAPE_SEQUENCE_LENGTH
                 ) {
                     finalPosition++;
                 }
 
-                if (finalPosition >= buffer.size()) {
+                const bool tooLong = finalPosition - consumed >= MAX_ESCAPE_SEQUENCE_LENGTH;
+                const bool incomplete = finalPosition >= buffer.size();
+                if (tooLong || (incomplete && forceEscape)) {
+                    appendKeyPulse(events, Key::Escape, {}, 0x1B);
+                    consumed++;
+                    continue;
+                }
+                if (incomplete) {
                     break;
                 }
 
-                parseCsi(buffer.substr(consumed, finalPosition - consumed + 1), events);
+                parseCsi(std::string_view(buffer).substr(consumed, finalPosition - consumed + 1), events);
                 consumed = finalPosition + 1;
                 continue;
             }
 
             if (next == 'O') {
                 if (consumed + 2 >= buffer.size()) {
+                    if (forceEscape) {
+                        appendKeyPulse(events, Key::Escape, {}, 0x1B);
+                        consumed++;
+                        continue;
+                    }
                     break;
                 }
-                parseSs3(buffer.substr(consumed, 3), events);
+                parseSs3(std::string_view(buffer).substr(consumed, 3), events);
                 consumed += 3;
                 continue;
             }
 
-            char32_t character = 0;
-            std::size_t length = 0;
-            if (!decodeUtf8At(buffer, consumed + 1, character, length)) {
-                break;
+            Utf8DecodeResult decoded = decodeNextUtf8(buffer, consumed + 1);
+            if (!decoded.complete) {
+                if (!forceEscape) {
+                    break;
+                }
+                appendKeyPulse(events, Key::Escape, {}, 0x1B);
+                consumed++;
+                continue;
             }
             ModifierState modifiers;
             modifiers.leftAlt = true;
-            appendCharacterPulse(events, character, modifiers);
-            consumed += 1 + length;
+            appendCharacterPulse(events, decoded.character, modifiers);
+            consumed += 1 + decoded.length;
             continue;
         }
 
@@ -416,24 +450,17 @@ void EscapeSequenceParser::parseAvailable(
             consumed++;
             continue;
         }
-        if (byte >= 0x01 && byte <= 0x1A) {
-            ModifierState modifiers;
-            modifiers.leftControl = true;
-            const Key key = static_cast<Key>(
-                static_cast<std::size_t>(Key::A) + static_cast<std::size_t>(byte - 1)
-            );
-            appendKeyPulse(events, key, modifiers, byte);
+        if (appendControlPulse(byte, events)) {
             consumed++;
             continue;
         }
 
-        char32_t character = 0;
-        std::size_t length = 0;
-        if (!decodeUtf8At(buffer, consumed, character, length)) {
+        Utf8DecodeResult decoded = decodeNextUtf8(buffer, consumed);
+        if (!decoded.complete) {
             break;
         }
-        appendCharacterPulse(events, character);
-        consumed += length;
+        appendCharacterPulse(events, decoded.character);
+        consumed += decoded.length;
     }
 
     if (consumed > 0) {

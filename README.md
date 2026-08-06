@@ -1,28 +1,28 @@
-# terminalTool 0.3.0
+# terminalTool 0.3.1
 
 `terminalTool` is a compact C++17 static library for terminal games and
 interactive terminal tools. It provides a cell framebuffer, true-colour ANSI
-rendering, cross-platform keyboard input, raw input events, focus reporting,
-clipping regions, terminal restoration, and delta time. Its public API lives in
-the `tt` namespace.
+rendering, cross-platform keyboard input, bounded raw input events, focus
+reporting, clipping, terminal restoration, and delta time. Its public API lives
+in the `tt` namespace.
 
 ```cpp
 #include <terminalTool/terminalTool.h>
 ```
 
-## 0.3.0 highlights
+## 0.3.1 hardening highlights
 
-- FIFO `tt::InputEvent` queue alongside the existing state API
-- Rich key event metadata and complete modifier state
-- Layout-neutral OEM key names with backward-compatible aliases
-- Focus events and focus transition queries
-- Expanded `tt::TerminalOptions`
-- Windows, Linux, and macOS keyboard backends
-- POSIX signal restoration
-- Internal platform abstraction
-- Incremental UTF-8/CSI/SS3 escape-sequence parser
-- Nested clipping regions and RAII `tt::Console::ScopedClip`
-- Expanded tests, CI, Doxygen comments, and usage guides
+- Version metadata comes from `project(VERSION ...)` only; CI contains no
+  release-number literals.
+- `tt::TerminalErrorCode::NoActiveSession` catches invalid runtime use.
+- Raw events are bounded and report discarded events.
+- Strict shared UTF-8 handling replaces malformed data predictably.
+- Terminal control characters and POSIX title injection are sanitized.
+- POSIX suspension restores the terminal and resume reapplies it.
+- Previous POSIX signal handlers are preserved and chained.
+- Windows modifier snapshots and repeated UTF-16 surrogate pairs are hardened.
+- Rectangle operations avoid signed overflow and huge off-screen line loops.
+- Subproject builds do not create tests, examples, or docs unless requested.
 
 ## Minimal loop
 
@@ -32,7 +32,7 @@ the `tt` namespace.
 int main() {
     tt::TerminalOptions options;
     options.title = "My Game";
-    options.enableFocusEvents = true;
+    options.maximumQueuedInputEvents = 4096;
 
     tt::TerminalSession terminal(options);
     tt::DeltaTime deltaTime;
@@ -54,110 +54,89 @@ int main() {
 }
 ```
 
-## Raw events
+Call `TerminalSession::update()` before `Input::update()`. This lets POSIX
+sessions reapply raw mode after `SIGCONT` before input is read.
 
-Unconsumed events persist in FIFO order across frames:
+## Bounded raw events
 
 ```cpp
 while (const std::optional<tt::InputEvent> event = tt::Input::pollEvent()) {
     if (event->type == tt::InputEventType::KeyPressed) {
         const tt::Key key = event->key.key;
-        const bool repeated = event->key.repeated;
-        const std::uint16_t scanCode = event->key.scanCode;
         const tt::ModifierState modifiers = event->key.modifiers;
     }
 }
+
+if (tt::Input::eventOverflowed()) {
+    const std::size_t lost = tt::Input::droppedEventCount();
+    tt::Input::clearEventOverflow();
+}
 ```
 
-The convenient state API remains available:
+Set `maximumQueuedInputEvents` to zero to disable raw-event retention while
+keeping `isPressed()`, `isHeld()`, `isReleased()`, and `textInput()` active.
+
+## Safe drawing and clipping
+
+Framebuffer control scalars such as Escape, newline, NUL, DEL, and C1 controls
+are replaced with U+FFFD instead of being emitted as terminal commands.
 
 ```cpp
-tt::Input::isPressed(tt::Key::Space);
-tt::Input::isHeld(tt::Key::W);
-tt::Input::isReleased(tt::Key::F1);
-tt::Input::textInput();
-tt::Input::isFocused();
-tt::Input::focusGained();
-tt::Input::focusLost();
-```
-
-POSIX terminals normally do not transmit physical key-release events.
-terminalTool therefore represents each decoded POSIX key sequence as a
-press/release pulse. `isPressed()` and native repeat sequences work normally;
-continuous `isHeld()` state is naturally strongest on Windows.
-
-## Physical keys and text
-
-OEM names are layout-neutral:
-
-```cpp
-tt::Key::Oem1
-tt::Key::Oem2
-tt::Key::Oem102
-```
-
-Compatibility aliases such as `tt::Key::Semicolon` remain. Use `Key` for
-bindings and `textInput()`/`TextEntered` for the actual character produced by
-the user's keyboard layout.
-
-## Clipping
-
-```cpp
-const tt::Console::Rect panelContents { 3, 4, 30, 10 };
-
+const tt::Console::Rect contents { 3, 4, 30, 10 };
 {
-    tt::Console::ScopedClip clip(panelContents);
+    tt::Console::ScopedClip clip(contents);
     drawLargeMapOrList();
-} // Previous clip is restored here.
+}
 ```
 
-Manual nesting is also available through `pushClip()`, `popClip()`,
-`clearClips()`, and `currentClip()`.
+Manual `pushClip()`/`popClip()` remains available. A mismatched `popClip()` is
+asserted in debug builds and ignored safely in release builds.
 
-## Terminal options
+## Error handling
 
 ```cpp
-tt::TerminalOptions options;
-options.title = "My Game";
-options.alternateScreen = true;
-options.hideCursor = true;
-options.disableLineWrapping = true;
-options.enableFocusEvents = true;
-options.clearOnStart = true;
-options.clearOnExit = false;
-options.installSignalHandlers = true;
-options.restoreTitle = true;
+try {
+    tt::TerminalSession terminal("My Game");
+    // ...
+} catch (const tt::TerminalError& error) {
+    std::cerr << error.what() << " (native " << error.nativeErrorCode() << ")\n";
+}
 ```
 
-## Platform behavior
-
-- Windows uses `ReadConsoleInputW` and provides real key-down/key-up events,
-  repeat counts, scan codes, left/right modifiers, lock state, and focus events.
-- Linux and macOS use `termios`, non-blocking reads, and the shared escape parser.
-- POSIX emergency restoration covers SIGINT, SIGTERM, SIGHUP, and SIGQUIT.
-- SIGWINCH is observed while `TerminalSession::update()` remains the explicit
-  resize point.
-
-See `docs/input.md`, `docs/platforms.md`, `docs/clipping.md`, and
-`docs/migration-0.2-to-0.3.md` for detailed contracts and examples.
+`Input::update()`, `Console::terminalSize()`, and `Console::endFrame()` report
+`NoActiveSession` when used without a live `TerminalSession`.
 
 ## CMake
+
+As a subdirectory:
 
 ```cmake
 add_subdirectory(external/terminalTool)
 target_link_libraries(MyGame PRIVATE terminalTool::terminalTool)
 ```
 
-Or install and consume it:
+Examples, tests, and documentation default off when terminalTool is a
+subproject. They can be enabled explicitly with the `TERMINALTOOL_BUILD_*`
+options.
+
+Installed package:
 
 ```cmake
-find_package(terminalTool 0.3.0 CONFIG REQUIRED)
+find_package(terminalTool 0.3.1 CONFIG REQUIRED)
 target_link_libraries(MyGame PRIVATE terminalTool::terminalTool)
 ```
 
 The library remains static regardless of `BUILD_SHARED_LIBS`.
 
-## Tests
+## Version verification
+
+`Version.h` is generated into the build directory.
+
+```sh
+cmake --build build --target terminalToolVersionCheck
+```
+
+## Tests and documentation
 
 ```sh
 cmake -S . -B build -DTERMINALTOOL_BUILD_TESTS=ON
@@ -165,16 +144,13 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-CI covers MSVC, MinGW, Ubuntu GCC, Ubuntu Clang, and macOS AppleClang.
-
-## Doxygen
-
 ```sh
-cmake -S . -B build
-cmake --build build --target docs
+cmake -S . -B build -DTERMINALTOOL_BUILD_DOCS=ON
+cmake --build build --target terminalToolDocs
 ```
 
-Generated HTML starts at `build/documentation/html/index.html`.
+See `docs/input.md`, `docs/platforms.md`, `docs/clipping.md`,
+`docs/error-handling.md`, and `docs/versioning.md`.
 
 ## Licence and ownership
 

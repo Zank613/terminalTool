@@ -1,55 +1,53 @@
-# Input model
+# Input
 
-terminalTool 0.3.0 provides two views of the same platform input stream:
+Call `tt::Input::update()` once per frame, after `TerminalSession::update()`.
+The state API is per-frame; the raw event queue persists until consumed.
 
-1. Per-frame state through `tt::Input::isPressed`, `isHeld`, `isReleased`,
-   `textInput`, and focus queries.
-2. A persistent FIFO queue through `tt::Input::pollEvent`.
-
-Call `tt::Input::update()` once near the beginning of each frame. It clears only
-per-frame transition and text state. Raw events remain queued until consumed or
-`clearEvents()` is called.
-
-## Event payloads
-
-`KeyPressed` and `KeyReleased` carry `tt::KeyEventData`:
-
-- Portable `tt::Key`
-- Repeat flag and native repeat count
-- Native scan code when available
-- Native virtual key or sequence code
-- Complete `tt::ModifierState`
-
-`TextEntered` carries one Unicode code point. It is intentionally separate from
-the physical/logical key because keyboard layout, Shift, Caps Lock, AltGr, and
-IME processing can change produced text.
-
-## Modifier state
-
-Windows reports left/right Control and Alt directly and terminalTool queries
-left/right Shift and Super state. POSIX escape protocols normally report only
-aggregate modifiers. terminalTool records aggregate POSIX state in the
-corresponding left-side field.
-
-Use the convenience functions:
+## State API
 
 ```cpp
-modifiers.shift();
-modifiers.control();
-modifiers.alt();
-modifiers.super();
-modifiers.altGr();
+tt::Input::isPressed(tt::Key::Space);
+tt::Input::isHeld(tt::Key::W);
+tt::Input::isReleased(tt::Key::Escape);
+tt::Input::textInput();
 ```
 
-## POSIX release behavior
+Windows provides genuine key-up state. POSIX terminals normally provide only
+byte sequences, so terminalTool emits press/release pulses there.
 
-Traditional terminals send bytes and escape sequences, not physical keyboard
-release records. Linux and macOS therefore emit a key press followed by a
-synthetic release for each decoded key sequence. Repeated keys arrive as
-repeated pulses from the terminal. Windows retains genuine held state.
+## Raw events
 
-## Escape ambiguity
+`InputEvent` preserves repeat count, scan code, native code, and modifier state
+where the platform supplies them. The queue is FIFO and bounded by
+`TerminalOptions::maximumQueuedInputEvents`.
 
-A lone Escape byte can also begin a CSI, SS3, or Alt-modified sequence. The
-shared parser waits briefly before accepting it as `tt::Key::Escape`, allowing
-split non-blocking reads to complete first.
+When full, the oldest event is removed before the new event is added:
+
+```cpp
+if (tt::Input::eventOverflowed()) {
+    log(tt::Input::droppedEventCount());
+    tt::Input::clearEventOverflow();
+}
+```
+
+A limit of zero disables event retention without disabling the state API.
+
+## Keys versus text
+
+Use layout-neutral `Oem1` through `Oem102` for bindings and `textInput()` or
+`TextEntered` for the actual character produced by the active keyboard layout.
+Compatibility aliases such as `Semicolon` remain.
+
+Traditional POSIX byte streams cannot always identify a physical key. Shifted
+ASCII digits are mapped to their conventional digit keys with Shift metadata.
+Ctrl+Space, Ctrl+Backslash, Ctrl+RightBracket, Ctrl+^, and Ctrl+_ are decoded.
+Ctrl+[ remains indistinguishable from Escape in traditional terminals.
+
+## Parser recovery
+
+Pending CSI/SS3 input is incremental and may span reads. Escape sequences are
+bounded to 128 bytes. Malformed or overlong sequences recover as ordinary input
+rather than growing the parser buffer indefinitely. Numeric CSI fields use
+checked `std::from_chars` parsing.
+
+Malformed UTF-8 produces U+FFFD with predictable byte advancement.

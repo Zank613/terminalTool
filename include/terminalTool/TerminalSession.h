@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <memory>
 #include <string>
 
@@ -48,10 +49,20 @@ struct TerminalOptions {
     bool clearOnExit = false;
 
     /**
+     * @brief Maximum persistent raw input events retained by Input.
+     *
+     * When the queue is full, the oldest event is discarded and the overflow
+     * counters are updated. Zero disables retention of raw events while the
+     * per-frame key and text state APIs continue to work.
+     */
+    std::size_t maximumQueuedInputEvents = 4096;
+
+    /**
      * @brief Install emergency restoration handlers.
      *
-     * On POSIX this covers SIGINT, SIGTERM, SIGHUP, and SIGQUIT, while SIGWINCH
-     * is observed for resizing. On Windows a console control handler is used.
+     * On POSIX this covers SIGINT, SIGTERM, SIGHUP, SIGQUIT, SIGTSTP,
+     * SIGCONT, and SIGWINCH. Suspension restores the terminal before stopping
+     * and reapplies the session on resume. On Windows a console control handler is used.
      */
     bool installSignalHandlers = true;
 

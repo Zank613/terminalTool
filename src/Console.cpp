@@ -9,14 +9,33 @@
 #include "terminalTool/Console.h"
 
 #include "terminalTool/TerminalError.h"
+#include "terminalTool/TerminalSession.h"
+#include "detail/Unicode.h"
 #include "platform/PlatformTerminal.h"
 
 #include <algorithm>
+#include <cassert>
 #include <cstdint>
 #include <limits>
 #include <new>
 #include <stdexcept>
 #include <utility>
+
+namespace {
+
+[[nodiscard]] int clampToInt(const std::int64_t value) noexcept {
+    return static_cast<int>(std::clamp<std::int64_t>(
+        value,
+        std::numeric_limits<int>::min(),
+        std::numeric_limits<int>::max()
+    ));
+}
+
+[[nodiscard]] bool fitsInt(const std::int64_t value) noexcept {
+    return value >= std::numeric_limits<int>::min() && value <= std::numeric_limits<int>::max();
+}
+
+} // namespace
 
 namespace tt {
 
@@ -29,11 +48,19 @@ std::vector<Console::Cell> Console::previousBuffer;
 std::vector<Console::Rect> Console::clipStack;
 
 bool Console::Rect::contains(const int pointX, const int pointY) const {
+    if (width <= 0 || height <= 0) {
+        return false;
+    }
+
+    const std::int64_t left = x;
+    const std::int64_t top = y;
+    const std::int64_t right = left + static_cast<std::int64_t>(width);
+    const std::int64_t bottom = top + static_cast<std::int64_t>(height);
     return
-        pointX >= x &&
-        pointY >= y &&
-        pointX < x + width &&
-        pointY < y + height;
+        static_cast<std::int64_t>(pointX) >= left &&
+        static_cast<std::int64_t>(pointY) >= top &&
+        static_cast<std::int64_t>(pointX) < right &&
+        static_cast<std::int64_t>(pointY) < bottom;
 }
 
 bool Console::Cell::operator==(const Cell& other) const {
@@ -152,6 +179,12 @@ void Console::shutdownFrameBuffer() noexcept {
 }
 
 Console::Size Console::terminalSize() {
+    if (!TerminalSession::hasActiveSession() || !detail::platformIsInitialized()) {
+        throw TerminalError(
+            TerminalErrorCode::NoActiveSession,
+            "tt::Console::terminalSize() requires an active TerminalSession."
+        );
+    }
     const detail::TerminalDimensions size = detail::platformTerminalSize();
     return Size { size.width, size.height };
 }
@@ -192,6 +225,9 @@ void Console::pushClip(const Rect& area) {
 }
 
 void Console::popClip() noexcept {
+#ifndef NDEBUG
+    assert(!clipStack.empty() && "tt::Console::popClip() called with an empty clip stack");
+#endif
     if (!clipStack.empty()) {
         clipStack.pop_back();
     }
@@ -230,7 +266,7 @@ void Console::drawCell(
         static_cast<std::size_t>(x);
 
     Cell& cell = frameBuffer[index];
-    cell.character = character;
+    cell.character = detail::sanitizeTerminalCell(character);
     cell.foreground = foreground;
     cell.background = background;
 }
@@ -253,23 +289,28 @@ void Console::drawTextClipped(
     const Colour foreground,
     const Colour background
 ) {
-    if (!frameBufferActive || y < clip.y || y >= clip.y + clip.height) {
+    if (!frameBufferActive) {
         return;
     }
 
     const Rect visibleClip = intersect(intersect(clip, frameRect()), activeClip());
 
-    if (visibleClip.width <= 0 || visibleClip.height <= 0) {
+    if (visibleClip.width <= 0 || visibleClip.height <= 0 ||
+        static_cast<std::int64_t>(y) < static_cast<std::int64_t>(visibleClip.y) ||
+        static_cast<std::int64_t>(y) >= static_cast<std::int64_t>(visibleClip.y) + visibleClip.height) {
         return;
     }
 
     const std::vector<char32_t> characters = decodeUtf8(text);
 
     for (std::size_t i = 0; i < characters.size(); i++) {
-        const int cellX = x + static_cast<int>(i);
-
-        if (visibleClip.contains(cellX, y)) {
-            drawCell(cellX, y, characters[i], foreground, background);
+        const std::int64_t cellX = static_cast<std::int64_t>(x) + static_cast<std::int64_t>(i);
+        if (cellX < std::numeric_limits<int>::min() || cellX > std::numeric_limits<int>::max()) {
+            continue;
+        }
+        const int safeCellX = static_cast<int>(cellX);
+        if (visibleClip.contains(safeCellX, y)) {
+            drawCell(safeCellX, y, characters[i], foreground, background);
         }
     }
 }
@@ -285,23 +326,24 @@ void Console::drawTextAligned(
         return;
     }
 
-    const int textWidth = static_cast<int>(decodeUtf8(text).size());
-    int x = area.x;
+    const std::int64_t textWidth = static_cast<std::int64_t>(decodeUtf8(text).size());
+    std::int64_t alignedX = area.x;
 
     switch (alignment) {
         case TextAlignment::Left:
             break;
 
         case TextAlignment::Centre:
-            x = area.x + (area.width - textWidth) / 2;
+            alignedX = static_cast<std::int64_t>(area.x) +
+                (static_cast<std::int64_t>(area.width) - textWidth) / 2;
             break;
 
         case TextAlignment::Right:
-            x = area.x + area.width - textWidth;
+            alignedX = static_cast<std::int64_t>(area.x) + area.width - textWidth;
             break;
     }
 
-    drawTextClipped(x, area.y, text, area, foreground, background);
+    drawTextClipped(clampToInt(alignedX), area.y, text, area, foreground, background);
 }
 
 int Console::drawWrappedText(
@@ -398,22 +440,27 @@ int Console::drawWrappedText(
             encodedLine += encodeUtf8(character);
         }
 
-        int x = area.x;
+        std::int64_t alignedX = area.x;
 
         switch (alignment) {
             case TextAlignment::Left:
                 break;
 
             case TextAlignment::Centre:
-                x = area.x + (area.width - static_cast<int>(line.size())) / 2;
+                alignedX = static_cast<std::int64_t>(area.x) +
+                    (static_cast<std::int64_t>(area.width) - static_cast<std::int64_t>(line.size())) / 2;
                 break;
 
             case TextAlignment::Right:
-                x = area.x + area.width - static_cast<int>(line.size());
+                alignedX = static_cast<std::int64_t>(area.x) + area.width -
+                    static_cast<std::int64_t>(line.size());
                 break;
         }
 
-        drawTextClipped(x, area.y + lineIndex, encodedLine, area, foreground, background);
+        const std::int64_t lineY = static_cast<std::int64_t>(area.y) + lineIndex;
+        if (fitsInt(lineY)) {
+            drawTextClipped(clampToInt(alignedX), static_cast<int>(lineY), encodedLine, area, foreground, background);
+        }
     }
 
     return visibleLines;
@@ -431,8 +478,9 @@ void Console::drawHorizontalLine(
         return;
     }
 
-    for (int offset = 0; offset < width; offset++) {
-        drawCell(x + offset, y, character, foreground, background);
+    const Rect visible = intersect(intersect(Rect { x, y, width, 1 }, frameRect()), activeClip());
+    for (int cellX = visible.x; cellX < visible.x + visible.width; cellX++) {
+        drawCell(cellX, y, character, foreground, background);
     }
 }
 
@@ -448,8 +496,9 @@ void Console::drawVerticalLine(
         return;
     }
 
-    for (int offset = 0; offset < height; offset++) {
-        drawCell(x, y + offset, character, foreground, background);
+    const Rect visible = intersect(intersect(Rect { x, y, 1, height }, frameRect()), activeClip());
+    for (int cellY = visible.y; cellY < visible.y + visible.height; cellY++) {
+        drawCell(x, cellY, character, foreground, background);
     }
 }
 
@@ -483,16 +532,28 @@ void Console::drawBox(
     }
 
     const BoxCharacters characters = boxCharacters(style);
+    const std::int64_t left = area.x;
+    const std::int64_t top = area.y;
+    const std::int64_t right = left + static_cast<std::int64_t>(area.width) - 1;
+    const std::int64_t bottom = top + static_cast<std::int64_t>(area.height) - 1;
 
-    drawHorizontalLine(area.x + 1, area.y, area.width - 2, characters.horizontal, foreground, background);
-    drawHorizontalLine(area.x + 1, area.y + area.height - 1, area.width - 2, characters.horizontal, foreground, background);
-    drawVerticalLine(area.x, area.y + 1, area.height - 2, characters.vertical, foreground, background);
-    drawVerticalLine(area.x + area.width - 1, area.y + 1, area.height - 2, characters.vertical, foreground, background);
+    if (fitsInt(left + 1) && fitsInt(top)) {
+        drawHorizontalLine(clampToInt(left + 1), static_cast<int>(top), area.width - 2, characters.horizontal, foreground, background);
+    }
+    if (fitsInt(left + 1) && fitsInt(bottom)) {
+        drawHorizontalLine(clampToInt(left + 1), static_cast<int>(bottom), area.width - 2, characters.horizontal, foreground, background);
+    }
+    if (fitsInt(left) && fitsInt(top + 1)) {
+        drawVerticalLine(static_cast<int>(left), clampToInt(top + 1), area.height - 2, characters.vertical, foreground, background);
+    }
+    if (fitsInt(right) && fitsInt(top + 1)) {
+        drawVerticalLine(static_cast<int>(right), clampToInt(top + 1), area.height - 2, characters.vertical, foreground, background);
+    }
 
-    drawCell(area.x, area.y, characters.topLeft, foreground, background);
-    drawCell(area.x + area.width - 1, area.y, characters.topRight, foreground, background);
-    drawCell(area.x, area.y + area.height - 1, characters.bottomLeft, foreground, background);
-    drawCell(area.x + area.width - 1, area.y + area.height - 1, characters.bottomRight, foreground, background);
+    if (fitsInt(left) && fitsInt(top)) drawCell(static_cast<int>(left), static_cast<int>(top), characters.topLeft, foreground, background);
+    if (fitsInt(right) && fitsInt(top)) drawCell(static_cast<int>(right), static_cast<int>(top), characters.topRight, foreground, background);
+    if (fitsInt(left) && fitsInt(bottom)) drawCell(static_cast<int>(left), static_cast<int>(bottom), characters.bottomLeft, foreground, background);
+    if (fitsInt(right) && fitsInt(bottom)) drawCell(static_cast<int>(right), static_cast<int>(bottom), characters.bottomRight, foreground, background);
 }
 
 void Console::drawPanel(
@@ -511,12 +572,21 @@ void Console::drawPanel(
     drawBox(area, border, background, style);
 
     if (!title.empty() && area.width > 4) {
-        const Rect titleArea { area.x + 2, area.y, area.width - 4, 1 };
-        drawTextClipped(titleArea.x, titleArea.y, " " + title + " ", titleArea, border, background);
+        const std::int64_t titleX = static_cast<std::int64_t>(area.x) + 2;
+        if (fitsInt(titleX)) {
+            const Rect titleArea { static_cast<int>(titleX), area.y, area.width - 4, 1 };
+            drawTextClipped(titleArea.x, titleArea.y, " " + title + " ", titleArea, border, background);
+        }
     }
 }
 
 void Console::endFrame() {
+    if (!TerminalSession::hasActiveSession() || !detail::platformIsInitialized()) {
+        throw TerminalError(
+            TerminalErrorCode::NoActiveSession,
+            "tt::Console::endFrame() requires an active TerminalSession."
+        );
+    }
     if (!frameBufferActive) {
         return;
     }
@@ -665,12 +735,33 @@ Console::Rect Console::activeClip() {
 }
 
 Console::Rect Console::intersect(const Rect& first, const Rect& second) {
-    const int left = std::max(first.x, second.x);
-    const int top = std::max(first.y, second.y);
-    const int right = std::min(first.x + first.width, second.x + second.width);
-    const int bottom = std::min(first.y + first.height, second.y + second.height);
+    const std::int64_t firstRight = static_cast<std::int64_t>(first.x) + std::max(0, first.width);
+    const std::int64_t firstBottom = static_cast<std::int64_t>(first.y) + std::max(0, first.height);
+    const std::int64_t secondRight = static_cast<std::int64_t>(second.x) + std::max(0, second.width);
+    const std::int64_t secondBottom = static_cast<std::int64_t>(second.y) + std::max(0, second.height);
 
-    return Rect { left, top, std::max(0, right - left), std::max(0, bottom - top) };
+    const std::int64_t left = std::max<std::int64_t>(first.x, second.x);
+    const std::int64_t top = std::max<std::int64_t>(first.y, second.y);
+    const std::int64_t right = std::min(firstRight, secondRight);
+    const std::int64_t bottom = std::min(firstBottom, secondBottom);
+
+    if (right <= left || bottom <= top) {
+        const int safeLeft = static_cast<int>(std::clamp<std::int64_t>(
+            left, std::numeric_limits<int>::min(), std::numeric_limits<int>::max()));
+        const int safeTop = static_cast<int>(std::clamp<std::int64_t>(
+            top, std::numeric_limits<int>::min(), std::numeric_limits<int>::max()));
+        return Rect { safeLeft, safeTop, 0, 0 };
+    }
+
+    const int safeLeft = static_cast<int>(std::clamp<std::int64_t>(
+        left, std::numeric_limits<int>::min(), std::numeric_limits<int>::max()));
+    const int safeTop = static_cast<int>(std::clamp<std::int64_t>(
+        top, std::numeric_limits<int>::min(), std::numeric_limits<int>::max()));
+    const int safeWidth = static_cast<int>(std::min<std::int64_t>(
+        right - left, std::numeric_limits<int>::max()));
+    const int safeHeight = static_cast<int>(std::min<std::int64_t>(
+        bottom - top, std::numeric_limits<int>::max()));
+    return Rect { safeLeft, safeTop, safeWidth, safeHeight };
 }
 
 Console::BoxCharacters Console::boxCharacters(const BoxStyle style) {
@@ -692,65 +783,11 @@ std::string Console::cursorPosition(const int x, const int y) {
 }
 
 std::string Console::encodeUtf8(const char32_t character) {
-    std::string result;
-
-    if (character <= 0x7F) {
-        result.push_back(static_cast<char>(character));
-    } else if (character <= 0x7FF) {
-        result.push_back(static_cast<char>(0xC0 | ((character >> 6) & 0x1F)));
-        result.push_back(static_cast<char>(0x80 | (character & 0x3F)));
-    } else if (character <= 0xFFFF) {
-        result.push_back(static_cast<char>(0xE0 | ((character >> 12) & 0x0F)));
-        result.push_back(static_cast<char>(0x80 | ((character >> 6) & 0x3F)));
-        result.push_back(static_cast<char>(0x80 | (character & 0x3F)));
-    } else if (character <= 0x10FFFF) {
-        result.push_back(static_cast<char>(0xF0 | ((character >> 18) & 0x07)));
-        result.push_back(static_cast<char>(0x80 | ((character >> 12) & 0x3F)));
-        result.push_back(static_cast<char>(0x80 | ((character >> 6) & 0x3F)));
-        result.push_back(static_cast<char>(0x80 | (character & 0x3F)));
-    } else {
-        result = "?";
-    }
-
-    return result;
+    return detail::encodeUtf8(character);
 }
 
 std::vector<char32_t> Console::decodeUtf8(const std::string& text) {
-    std::vector<char32_t> result;
-    result.reserve(text.size());
-
-    for (std::size_t i = 0; i < text.size();) {
-        const auto first = static_cast<unsigned char>(text[i]);
-        char32_t character = U'?';
-        std::size_t length = 1;
-
-        if ((first & 0x80) == 0) {
-            character = first;
-        } else if ((first & 0xE0) == 0xC0 && i + 1 < text.size()) {
-            character =
-                static_cast<char32_t>(first & 0x1F) << 6 |
-                static_cast<char32_t>(static_cast<unsigned char>(text[i + 1]) & 0x3F);
-            length = 2;
-        } else if ((first & 0xF0) == 0xE0 && i + 2 < text.size()) {
-            character =
-                static_cast<char32_t>(first & 0x0F) << 12 |
-                static_cast<char32_t>(static_cast<unsigned char>(text[i + 1]) & 0x3F) << 6 |
-                static_cast<char32_t>(static_cast<unsigned char>(text[i + 2]) & 0x3F);
-            length = 3;
-        } else if ((first & 0xF8) == 0xF0 && i + 3 < text.size()) {
-            character =
-                static_cast<char32_t>(first & 0x07) << 18 |
-                static_cast<char32_t>(static_cast<unsigned char>(text[i + 1]) & 0x3F) << 12 |
-                static_cast<char32_t>(static_cast<unsigned char>(text[i + 2]) & 0x3F) << 6 |
-                static_cast<char32_t>(static_cast<unsigned char>(text[i + 3]) & 0x3F);
-            length = 4;
-        }
-
-        result.push_back(character);
-        i += length;
-    }
-
-    return result;
+    return detail::decodeUtf8(text);
 }
 
 } // namespace tt

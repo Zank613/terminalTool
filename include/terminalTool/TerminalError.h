@@ -17,6 +17,7 @@ namespace tt {
 /** @brief Portable category identifying a failed terminal operation. */
 enum class TerminalErrorCode {
     SessionAlreadyActive,
+    NoActiveSession,
     InvalidOutputHandle,
     InvalidInputHandle,
     OutputIsNotTerminal,

@@ -1,0 +1,7 @@
+cmake_minimum_required(VERSION 3.20)
+project(terminalToolFindConsumer LANGUAGES CXX)
+
+find_package(terminalTool CONFIG REQUIRED)
+add_executable(terminalToolFindConsumer main.cpp)
+target_link_libraries(terminalToolFindConsumer PRIVATE terminalTool::terminalTool)
+target_compile_features(terminalToolFindConsumer PRIVATE cxx_std_17)
